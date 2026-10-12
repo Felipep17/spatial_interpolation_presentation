@@ -46,7 +46,12 @@ def listar_fuentes(raster_dir: Path):
 def cargar_recorte_nc(nc_path: Path, bounds, res=0.1):
     minx, miny, maxx, maxy = bounds
     pad = res / 2
-    ds = xr.open_dataset(nc_path)
+
+    try:
+        ds = xr.open_dataset(nc_path, engine="h5netcdf")
+    except Exception:
+        ds = xr.open_dataset(nc_path)
+
     vars_validas = [
         v
         for v in ds.data_vars
@@ -85,7 +90,6 @@ def cargar_recorte_nc(nc_path: Path, bounds, res=0.1):
     ) and float(da.mean().values) > 100:
         da = da - 273.15
     return da, lat_col, lon_col, pad
-
 
 def calcular_estadisticas_zonales(
     gdf: gpd.GeoDataFrame,
@@ -487,7 +491,11 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
     if gdf.crs and gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
 
-    ds = xr.open_dataset(nc_path)
+    try:
+        ds = xr.open_dataset(nc_path, engine="h5netcdf")
+    except Exception:
+        ds = xr.open_dataset(nc_path)
+    # ... resto del código igual
     da_p = ds["precipitation"]
     lat_col = "lat" if "lat" in da_p.coords else "latitude"
     lon_col = "lon" if "lon" in da_p.coords else "longitude"
