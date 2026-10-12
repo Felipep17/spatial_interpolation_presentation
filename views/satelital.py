@@ -23,43 +23,98 @@ def render(gdf, inputs_path: Path):
         st.warning("No se encontraron carpetas raster.")
         return
 
+@st.cache_data(show_spinner=False)
+    def _render_c3s_cached(f_rh_str, f_t_str, bounds_tup):
+        da_rh, lat_c, lon_c, pad = cargar_recorte_nc(
+            Path(f_rh_str), bounds_tup
+        )
+        da_t, _, _, _ = cargar_recorte_nc(Path(f_t_str), bounds_tup)
+        stats, times, lats, lons = calcular_estadisticas_zonales(
+            gdf, da_rh, da_t, lat_c, lon_c, pad
+        )
+        mapa = generar_mapa_interactivo(
+            gdf, da_rh, da_t, stats, times, lats, lons, pad
+        )
+        return mapa.get_root().render()
+
+    @st.cache_data(show_spinner=False)
+    def _render_chirps_cached(f_ch_str):
+        mapa = generar_mapa_chirps(gdf, Path(f_ch_str))
+        return mapa.get_root().render()
+
     pestanas = st.tabs(list(fuentes.keys()))
     for nombre, tab in zip(fuentes.keys(), pestanas):
         with tab:
             st.subheader(f"Fuente: {nombre}")
             url = ENLACES.get(nombre.upper())
             if url:
-                st.caption(f"🌐 [Ver Documentación Oficial y Acceso a Datos]({url})")
+                st.caption(
+                    f"🌐 [Ver Documentación Oficial y Acceso a Datos]({url})"
+                )
 
             archivos = fuentes[nombre]
 
             if nombre.upper() == "C3S":
-                f_rh = next((f for f in archivos if "relative_humidity" in f.name), None)
-                f_t = next((f for f in archivos if "temperature_maximu" in f.name or "t2m" in f.name), None)
+                f_rh = next(
+                    (f for f in archivos if "relative_humidity" in f.name),
+                    None,
+                )
+                f_t = next(
+                    (
+                        f
+                        for f in archivos
+                        if "temperature_maximu" in f.name or "t2m" in f.name
+                    ),
+                    None,
+                )
                 if f_rh and f_t:
-                    with st.spinner("Procesando C3S..."):
-                        da_rh, lat_c, lon_c, pad = cargar_recorte_nc(f_rh, gdf.total_bounds)
-                        da_t, _, _, _ = cargar_recorte_nc(f_t, gdf.total_bounds)
-                        stats, times, lats, lons = calcular_estadisticas_zonales(gdf, da_rh, da_t, lat_c, lon_c, pad)
-                        mapa = generar_mapa_interactivo(gdf, da_rh, da_t, stats, times, lats, lons, pad)
-                        mapa_html = mapa.get_root().render()
-                    components.html(mapa_html, height=820, scrolling=False)
+                    with st.spinner("Cargando C3S..."):
+                        bounds_tup = tuple(gdf.total_bounds)
+                        mapa_html = _render_c3s_cached(
+                            str(f_rh), str(f_t), bounds_tup
+                        )
+                    components.html(
+                        mapa_html,
+                        height=820,
+                        scrolling=False,
+                        key=f"c3s_{f_rh.name}",
+                    )
                 else:
                     st.warning("Archivos de HR o Temperatura no encontrados.")
 
             elif nombre.upper() == "CHIRPS":
-                f_ch = next((f for f in archivos if "chirps" in f.name.lower() and f.suffix == ".nc"), None)
+                f_ch = next(
+                    (
+                        f
+                        for f in archivos
+                        if "chirps" in f.name.lower() and f.suffix == ".nc"
+                    ),
+                    None,
+                )
                 if f_ch:
-                    with st.spinner("Procesando precipitación CHIRPS..."):
-                        mapa_ch = generar_mapa_chirps(gdf, f_ch)
-                        mapa_ch_html = mapa_ch.get_root().render()
-                    components.html(mapa_ch_html, height=820, scrolling=False)
+                    with st.spinner("Cargando CHIRPS..."):
+                        mapa_ch_html = _render_chirps_cached(str(f_ch))
+                    components.html(
+                        mapa_ch_html,
+                        height=820,
+                        scrolling=False,
+                        key=f"ch_{f_ch.name}",
+                    )
                 else:
                     st.warning("No se encontró el archivo NetCDF de CHIRPS.")
 
             else:
                 if archivos:
-                    data = [{"Archivo": a.name, "Extensión": a.suffix, "Tamaño (MB)": round(a.stat().st_size / (1024 * 1024), 2)} for a in archivos]
+                    data = [
+                        {
+                            "Archivo": a.name,
+                            "Extensión": a.suffix,
+                            "Tamaño (MB)": round(
+                                a.stat().st_size / (1024 * 1024), 2
+                            ),
+                        }
+                        for a in archivos
+                    ]
                     st.dataframe(data, use_container_width=True)
                 else:
                     st.info(f"Sin archivos en {nombre}.")
