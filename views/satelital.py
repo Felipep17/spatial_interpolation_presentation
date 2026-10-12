@@ -74,12 +74,7 @@ def render(gdf, inputs_path: Path):
                         mapa_html = _render_c3s_cached(
                             gdf, str(f_rh), str(f_t), bounds_tup
                         )
-                    components.html(
-                        mapa_html,
-                        height=820,
-                        scrolling=False,
-                        key=f"c3s_{f_rh.name}",
-                    )
+                    components.html(mapa_html, height=820, scrolling=False)
                 else:
                     st.warning("Archivos de HR o Temperatura no encontrados.")
 
@@ -95,12 +90,7 @@ def render(gdf, inputs_path: Path):
                 if f_ch:
                     with st.spinner("Cargando CHIRPS..."):
                         mapa_ch_html = _render_chirps_cached(gdf, str(f_ch))
-                    components.html(
-                        mapa_ch_html,
-                        height=820,
-                        scrolling=False,
-                        key=f"ch_{f_ch.name}",
-                    )
+                    components.html(mapa_ch_html, height=820, scrolling=False)
                 else:
                     st.warning("No se encontró el archivo NetCDF de CHIRPS.")
 
