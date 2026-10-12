@@ -11,18 +11,7 @@ from shapely.geometry import box
 import streamlit as st
 import xarray as xr
 
-@st.cache_data(show_spinner=False)
-def obtener_html_mapa_c3s(
-    _gdf, _da_rh, _da_t, barrios_stats, time_vals, lats, lons, pad
-):
-    mapa = generar_mapa_interactivo(
-        _gdf, _da_rh, _da_t, barrios_stats, time_vals, lats, lons, pad
-    )
-    return mapa.get_root().render()
-@st.cache_data(show_spinner=False)
-def obtener_html_mapa_chirps(_gdf, nc_path: Path):
-    mapa = generar_mapa_chirps(_gdf, nc_path)
-    return mapa.get_root().render()
+
 @st.cache_data
 def cargar_shapefile(carpeta: Path):
     formatos = ["*.parquet", "*.shp", "*.geojson", "*.gpkg"]
@@ -502,11 +491,7 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
     if gdf.crs and gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
 
-    try:
-        ds = xr.open_dataset(nc_path, engine="h5netcdf")
-    except Exception:
-        ds = xr.open_dataset(nc_path)
-
+    ds = xr.open_dataset(nc_path)
     da_p = ds["precipitation"]
     lat_col = "lat" if "lat" in da_p.coords else "latitude"
     lon_col = "lon" if "lon" in da_p.coords else "longitude"
@@ -527,6 +512,12 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
     m = folium.Map(
         location=[centro_lat, centro_lon],
         zoom_start=12,
+        min_zoom=9,
+        max_bounds=True,
+        min_lat=miny - 0.5,
+        max_lat=maxy + 0.5,
+        min_lon=minx - 0.5,
+        max_lon=maxx + 0.5,
         tiles="OpenStreetMap",
         width="100%",
         height="780px",
@@ -731,7 +722,8 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
         var map = window[map_id_ch];
         if (!map) return;
         map.invalidateSize();
-        map.fitBounds(b_coords_ch);
+        map.setView([{centro_lat}, {centro_lon}], 12);
+        map.fitBounds(b_coords_ch, {{padding: [20, 20]}});
     }}
 
     function initChirps() {{
@@ -766,7 +758,7 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
             actPixelCh(ultimoLatLng_ch);
         }});
 
-        [150, 400, 800].forEach(function(d){{
+        [200, 500, 1000, 2000].forEach(function(d){{
             setTimeout(forzarCaliCh, d);
         }});
     }}
