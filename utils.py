@@ -11,7 +11,18 @@ from shapely.geometry import box
 import streamlit as st
 import xarray as xr
 
-
+@st.cache_data(show_spinner=False)
+def obtener_html_mapa_c3s(
+    _gdf, _da_rh, _da_t, barrios_stats, time_vals, lats, lons, pad
+):
+    mapa = generar_mapa_interactivo(
+        _gdf, _da_rh, _da_t, barrios_stats, time_vals, lats, lons, pad
+    )
+    return mapa.get_root().render()
+@st.cache_data(show_spinner=False)
+def obtener_html_mapa_chirps(_gdf, nc_path: Path):
+    mapa = generar_mapa_chirps(_gdf, nc_path)
+    return mapa.get_root().render()
 @st.cache_data
 def cargar_shapefile(carpeta: Path):
     formatos = ["*.parquet", "*.shp", "*.geojson", "*.gpkg"]
