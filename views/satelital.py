@@ -1,12 +1,12 @@
+from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
-from pathlib import Path
 from utils import (
-    listar_fuentes,
-    cargar_recorte_nc,
     calcular_estadisticas_zonales,
-    generar_mapa_interactivo,
+    cargar_recorte_nc,
     generar_mapa_chirps,
+    generar_mapa_interactivo,
+    listar_fuentes,
 )
 
 ENLACES = {
@@ -16,31 +16,32 @@ ENLACES = {
     "GEE": None,
 }
 
+
+@st.cache_data(show_spinner=False)
+def _render_c3s_cached(_gdf, f_rh_str, f_t_str, bounds_tup):
+    da_rh, lat_c, lon_c, pad = cargar_recorte_nc(Path(f_rh_str), bounds_tup)
+    da_t, _, _, _ = cargar_recorte_nc(Path(f_t_str), bounds_tup)
+    stats, times, lats, lons = calcular_estadisticas_zonales(
+        _gdf, da_rh, da_t, lat_c, lon_c, pad
+    )
+    mapa = generar_mapa_interactivo(
+        _gdf, da_rh, da_t, stats, times, lats, lons, pad
+    )
+    return mapa.get_root().render()
+
+
+@st.cache_data(show_spinner=False)
+def _render_chirps_cached(_gdf, f_ch_str):
+    mapa = generar_mapa_chirps(_gdf, Path(f_ch_str))
+    return mapa.get_root().render()
+
+
 def render(gdf, inputs_path: Path):
     st.title("🛰️ Fuentes Satelitales")
     fuentes = listar_fuentes(inputs_path / "raster")
     if not fuentes:
         st.warning("No se encontraron carpetas raster.")
         return
-
-@st.cache_data(show_spinner=False)
-    def _render_c3s_cached(f_rh_str, f_t_str, bounds_tup):
-        da_rh, lat_c, lon_c, pad = cargar_recorte_nc(
-            Path(f_rh_str), bounds_tup
-        )
-        da_t, _, _, _ = cargar_recorte_nc(Path(f_t_str), bounds_tup)
-        stats, times, lats, lons = calcular_estadisticas_zonales(
-            gdf, da_rh, da_t, lat_c, lon_c, pad
-        )
-        mapa = generar_mapa_interactivo(
-            gdf, da_rh, da_t, stats, times, lats, lons, pad
-        )
-        return mapa.get_root().render()
-
-    @st.cache_data(show_spinner=False)
-    def _render_chirps_cached(f_ch_str):
-        mapa = generar_mapa_chirps(gdf, Path(f_ch_str))
-        return mapa.get_root().render()
 
     pestanas = st.tabs(list(fuentes.keys()))
     for nombre, tab in zip(fuentes.keys(), pestanas):
@@ -71,7 +72,7 @@ def render(gdf, inputs_path: Path):
                     with st.spinner("Cargando C3S..."):
                         bounds_tup = tuple(gdf.total_bounds)
                         mapa_html = _render_c3s_cached(
-                            str(f_rh), str(f_t), bounds_tup
+                            gdf, str(f_rh), str(f_t), bounds_tup
                         )
                     components.html(
                         mapa_html,
@@ -93,7 +94,7 @@ def render(gdf, inputs_path: Path):
                 )
                 if f_ch:
                     with st.spinner("Cargando CHIRPS..."):
-                        mapa_ch_html = _render_chirps_cached(str(f_ch))
+                        mapa_ch_html = _render_chirps_cached(gdf, str(f_ch))
                     components.html(
                         mapa_ch_html,
                         height=820,
