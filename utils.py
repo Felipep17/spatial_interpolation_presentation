@@ -1,15 +1,16 @@
 import json
 from pathlib import Path
+import branca.colormap as bcm
+from branca.element import Element
+import folium
+from folium.plugins import TimestampedGeoJson
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from shapely.geometry import box
 import streamlit as st
 import xarray as xr
-import folium
-from folium.plugins import TimestampedGeoJson
-import branca.colormap as bcm
-from branca.element import Element
-from shapely.geometry import box
+
 
 @st.cache_data
 def cargar_shapefile(carpeta: Path):
@@ -22,43 +23,93 @@ def cargar_shapefile(carpeta: Path):
             break
     if not arch:
         raise FileNotFoundError(f"Sin vectores en {carpeta}")
-    gdf = gpd.read_parquet(arch) if arch.suffix == ".parquet" else gpd.read_file(arch)
+    gdf = (
+        gpd.read_parquet(arch)
+        if arch.suffix == ".parquet"
+        else gpd.read_file(arch)
+    )
     if gdf.crs and gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
     return gdf
+
 
 def listar_fuentes(raster_dir: Path):
     fuentes = {}
     if raster_dir.exists():
         for d in sorted([p for p in raster_dir.iterdir() if p.is_dir()]):
-            fuentes[d.name] = sorted(list(d.glob("*.nc")) + list(d.glob("*.tif")))
+            fuentes[d.name] = sorted(
+                list(d.glob("*.nc")) + list(d.glob("*.tif"))
+            )
     return fuentes
+
 
 def cargar_recorte_nc(nc_path: Path, bounds, res=0.1):
     minx, miny, maxx, maxy = bounds
     pad = res / 2
     ds = xr.open_dataset(nc_path)
-    vars_validas = [v for v in ds.data_vars if len(ds[v].dims) >= 2 and v not in ["spatial_ref", "crs"]]
+    vars_validas = [
+        v
+        for v in ds.data_vars
+        if len(ds[v].dims) >= 2 and v not in ["spatial_ref", "crs"]
+    ]
     var_name = vars_validas[0] if vars_validas else list(ds.data_vars)[0]
     da = ds[var_name]
-    lat_col = next(c for c in list(da.coords) + list(da.dims) if c.lower() in ["latitude", "lat", "y"])
-    lon_col = next(c for c in list(da.coords) + list(da.dims) if c.lower() in ["longitude", "lon", "x"])
-    minx_s, maxx_s = (minx + 360, maxx + 360) if (float(da[lon_col].min()) >= 0 and minx < 0) else (minx, maxx)
-    lat_slice = slice(maxy + pad, miny - pad) if da[lat_col].values[0] > da[lat_col].values[-1] else slice(miny - pad, maxy + pad)
+    lat_col = next(
+        c
+        for c in list(da.coords) + list(da.dims)
+        if c.lower() in ["latitude", "lat", "y"]
+    )
+    lon_col = next(
+        c
+        for c in list(da.coords) + list(da.dims)
+        if c.lower() in ["longitude", "lon", "x"]
+    )
+    minx_s, maxx_s = (
+        (minx + 360, maxx + 360)
+        if (float(da[lon_col].min()) >= 0 and minx < 0)
+        else (minx, maxx)
+    )
+    lat_slice = (
+        slice(maxy + pad, miny - pad)
+        if da[lat_col].values[0] > da[lat_col].values[-1]
+        else slice(miny - pad, maxy + pad)
+    )
     lon_slice = slice(minx_s - pad, maxx_s + pad)
     da = da.sel({lat_col: lat_slice, lon_col: lon_slice})
     if float(ds[lon_col].min()) >= 0 and minx < 0:
         da = da.assign_coords({lon_col: da[lon_col] - 360})
-    if ("temp" in var_name.lower() or "t2m" in var_name.lower() or "mx2t" in var_name.lower()) and float(da.mean().values) > 100:
+    if (
+        "temp" in var_name.lower()
+        or "t2m" in var_name.lower()
+        or "mx2t" in var_name.lower()
+    ) and float(da.mean().values) > 100:
         da = da - 273.15
     return da, lat_col, lon_col, pad
 
-def calcular_estadisticas_zonales(gdf: gpd.GeoDataFrame, da_rh: xr.DataArray, da_t: xr.DataArray, lat_col: str, lon_col: str, pad: float):
+
+def calcular_estadisticas_zonales(
+    gdf: gpd.GeoDataFrame,
+    da_rh: xr.DataArray,
+    da_t: xr.DataArray,
+    lat_col: str,
+    lon_col: str,
+    pad: float,
+):
     lats = da_rh[lat_col].values
     lons = da_rh[lon_col].values
     time_vals = pd.to_datetime(da_rh.time.values)
-    pixel_boxes = [{"i": i, "j": j, "geom": box(lon - pad, lat - pad, lon + pad, lat + pad)} for i, lat in enumerate(lats) for j, lon in enumerate(lons)]
-    col_nombre = next((c for c in gdf.columns if c.lower() == "nombre"), gdf.columns[0])
+    pixel_boxes = [
+        {
+            "i": i,
+            "j": j,
+            "geom": box(lon - pad, lat - pad, lon + pad, lat + pad),
+        }
+        for i, lat in enumerate(lats)
+        for j, lon in enumerate(lons)
+    ]
+    col_nombre = next(
+        (c for c in gdf.columns if c.lower() == "nombre"), gdf.columns[0]
+    )
     gdf["b_id"] = list(range(len(gdf)))
     gdf["nombre_barrio"] = gdf[col_nombre].astype(str)
     barrios_stats = []
@@ -67,30 +118,71 @@ def calcular_estadisticas_zonales(gdf: gpd.GeoDataFrame, da_rh: xr.DataArray, da
         touching = [p for p in pixel_boxes if b_geom.intersects(p["geom"])]
         rh_prom, t_prom = [], []
         for ti in range(len(time_vals)):
-            v_rh = [float(da_rh.isel(time=ti).values[p["i"], p["j"]]) for p in touching]
-            v_t = [float(da_t.isel(time=ti).values[p["i"], p["j"]]) for p in touching]
+            v_rh = [
+                float(da_rh.isel(time=ti).values[p["i"], p["j"]])
+                for p in touching
+            ]
+            v_t = [
+                float(da_t.isel(time=ti).values[p["i"], p["j"]])
+                for p in touching
+            ]
             v_rh = [v for v in v_rh if not np.isnan(v)]
             v_t = [v for v in v_t if not np.isnan(v)]
             rh_prom.append(round(float(np.mean(v_rh)), 1) if v_rh else None)
             t_prom.append(round(float(np.mean(v_t)), 1) if v_t else None)
-        barrios_stats.append({"id": int(idx), "nom": str(row["nombre_barrio"]), "n_pix": int(len(touching)), "rh": rh_prom, "t": t_prom})
+        barrios_stats.append(
+            {
+                "id": int(idx),
+                "nom": str(row["nombre_barrio"]),
+                "n_pix": int(len(touching)),
+                "rh": rh_prom,
+                "t": t_prom,
+            }
+        )
     gdf["n_pixeles"] = [b["n_pix"] for b in barrios_stats]
     return barrios_stats, time_vals, lats, lons
 
-def generar_mapa_interactivo(gdf, da_rh, da_t, barrios_stats, time_vals, lats, lons, pad, *args, **kwargs):
-    minx, miny, maxx, maxy = gdf.total_bounds
+
+def generar_mapa_interactivo(
+    gdf, da_rh, da_t, barrios_stats, time_vals, lats, lons, pad, *args, **kwargs
+):
+    if gdf.crs and gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+    minx, miny, maxx, maxy = [float(v) for v in gdf.total_bounds]
     centro_lat = (miny + maxy) / 2
     centro_lon = (minx + maxx) / 2
-    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=12, tiles="OpenStreetMap", width="100%", height="780px")
 
-    vmin_rh, vmax_rh = round(float(np.nanmin(da_rh.values)), 1), round(float(np.nanmax(da_rh.values)), 1)
-    vmin_t, vmax_t = round(float(np.nanmin(da_t.values)), 1), round(float(np.nanmax(da_t.values)), 1)
+    m = folium.Map(
+        location=[centro_lat, centro_lon],
+        zoom_start=12,
+        min_zoom=9,
+        max_bounds=True,
+        min_lat=miny - 0.5,
+        max_lat=maxy + 0.5,
+        min_lon=minx - 0.5,
+        max_lon=maxx + 0.5,
+        tiles="OpenStreetMap",
+        width="100%",
+        height="780px",
+    )
+    m.fit_bounds([[miny, minx], [maxy, maxx]])
+
+    vmin_rh, vmax_rh = round(float(np.nanmin(da_rh.values)), 1), round(
+        float(np.nanmax(da_rh.values)), 1
+    )
+    vmin_t, vmax_t = round(float(np.nanmin(da_t.values)), 1), round(
+        float(np.nanmax(da_t.values)), 1
+    )
     cm_rh = bcm.linear.viridis.scale(vmin_rh, vmax_rh)
     cm_t = bcm.linear.YlOrRd_09.scale(vmin_t, vmax_t)
 
     if len(time_vals) > 1:
-        dt_hours = max(1, int((time_vals[1] - time_vals[0]).total_seconds() / 3600))
-        period_str = f"P{dt_hours // 24}D" if dt_hours >= 24 else f"PT{dt_hours}H"
+        dt_hours = max(
+            1, int((time_vals[1] - time_vals[0]).total_seconds() / 3600)
+        )
+        period_str = (
+            f"P{dt_hours // 24}D" if dt_hours >= 24 else f"PT{dt_hours}H"
+        )
         date_fmt = "YYYY-MM-DD" if dt_hours >= 24 else "YYYY-MM-DD HH:mm"
     else:
         period_str = "P1D"
@@ -104,20 +196,90 @@ def generar_mapa_interactivo(gdf, da_rh, da_t, barrios_stats, time_vals, lats, l
         for i, lat_val in enumerate(lats):
             for j, lon_val in enumerate(lons):
                 v_rh, v_t = float(vals_rh[i, j]), float(vals_t[i, j])
-                coords = [[[lon_val - pad, lat_val - pad], [lon_val + pad, lat_val - pad], [lon_val + pad, lat_val + pad], [lon_val - pad, lat_val + pad], [lon_val - pad, lat_val - pad]]]
+                coords = [
+                    [
+                        [lon_val - pad, lat_val - pad],
+                        [lon_val + pad, lat_val - pad],
+                        [lon_val + pad, lat_val + pad],
+                        [lon_val - pad, lat_val + pad],
+                        [lon_val - pad, lat_val - pad],
+                    ]
+                ]
                 if not np.isnan(v_rh):
-                    features_rh.append({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": coords}, "properties": {"times": [iso_time], "style": {"fillColor": cm_rh(v_rh), "fillOpacity": 0.38, "color": "white", "weight": 0.3}}})
+                    features_rh.append(
+                        {
+                            "type": "Feature",
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": coords,
+                            },
+                            "properties": {
+                                "times": [iso_time],
+                                "style": {
+                                    "fillColor": cm_rh(v_rh),
+                                    "fillOpacity": 0.38,
+                                    "color": "white",
+                                    "weight": 0.3,
+                                },
+                            },
+                        }
+                    )
                 if not np.isnan(v_t):
-                    features_t.append({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": coords}, "properties": {"times": [iso_time], "style": {"fillColor": cm_t(v_t), "fillOpacity": 0.38, "color": "white", "weight": 0.3}}})
+                    features_t.append(
+                        {
+                            "type": "Feature",
+                            "geometry": {
+                                "type": "Polygon",
+                                "coordinates": coords,
+                            },
+                            "properties": {
+                                "times": [iso_time],
+                                "style": {
+                                    "fillColor": cm_t(v_t),
+                                    "fillOpacity": 0.38,
+                                    "color": "white",
+                                    "weight": 0.3,
+                                },
+                            },
+                        }
+                    )
 
-    tg_rh = TimestampedGeoJson({"type": "FeatureCollection", "features": features_rh}, period=period_str, duration=period_str, add_last_point=False, auto_play=False, loop=False, max_speed=5, loop_button=True, date_options=date_fmt, time_slider_drag_update=True)
+    tg_rh = TimestampedGeoJson(
+        {"type": "FeatureCollection", "features": features_rh},
+        period=period_str,
+        duration=period_str,
+        add_last_point=False,
+        auto_play=False,
+        loop=False,
+        max_speed=5,
+        loop_button=True,
+        date_options=date_fmt,
+        time_slider_drag_update=True,
+    )
     tg_rh.add_to(m)
 
     folium.GeoJson(
-        gdf, name="Límites Cali", show=True,
-        style_function=lambda x: {"fillColor": "#ffffff", "fillOpacity": 0.04, "color": "#111111", "weight": 1.2},
-        highlight_function=lambda x: {"weight": 2.5, "color": "#000000", "fillOpacity": 0.20},
-        tooltip=folium.GeoJsonTooltip(fields=["nombre_barrio", "n_pixeles"], aliases=["Barrio:", "No. Píxeles:"], localize=True, sticky=True, style="background-color: white; border-radius: 4px; padding: 6px; font-weight: bold; border: 1px solid #444;")
+        gdf,
+        name="Límites Cali",
+        show=True,
+        style_function=lambda x: {
+            "fillColor": "#ffffff",
+            "fillOpacity": 0.04,
+            "color": "#111111",
+            "weight": 1.2,
+        },
+        highlight_function=lambda x: {
+            "weight": 2.5,
+            "color": "#000000",
+            "fillOpacity": 0.20,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["nombre_barrio", "n_pixeles"],
+            aliases=["Barrio:", "No. Píxeles:"],
+            localize=True,
+            sticky=True,
+            style="background-color: white; border-radius: 4px; padding: 6px; font-weight: bold; border: 1px solid #444;",
+        ),
     ).add_to(m)
 
     folium.LayerControl(position="topright", collapsed=False).add_to(m)
@@ -126,8 +288,34 @@ def generar_mapa_interactivo(gdf, da_rh, da_t, barrios_stats, time_vals, lats, l
         "lats": [float(x) for x in lats],
         "lons": [float(x) for x in lons],
         "pad": float(pad),
-        "rh": [[[None if np.isnan(v) else round(float(v), 1) for v in da_rh.isel(time=t_i).values[i]] for i in range(len(lats))] for t_i in range(len(time_vals))],
-        "t": [[[None if np.isnan(v) else round(float(v), 1) for v in da_t.isel(time=t_i).values[i]] for i in range(len(lats))] for t_i in range(len(time_vals))]
+        "rh": [
+            [
+                [
+                    (
+                        None
+                        if np.isnan(v)
+                        else round(float(v), 1)
+                    )
+                    for v in da_rh.isel(time=t_i).values[i]
+                ]
+                for i in range(len(lats))
+            ]
+            for t_i in range(len(time_vals))
+        ],
+        "t": [
+            [
+                [
+                    (
+                        None
+                        if np.isnan(v)
+                        else round(float(v), 1)
+                    )
+                    for v in da_t.isel(time=t_i).values[i]
+                ]
+                for i in range(len(lats))
+            ]
+            for t_i in range(len(time_vals))
+        ],
     }
 
     panel_html = Element(f"""
@@ -169,6 +357,7 @@ def generar_mapa_interactivo(gdf, da_rh, da_t, barrios_stats, time_vals, lats, l
     window.barrioActivoIdx = null;
     window.caliLayerVisible = true;
     window.ultimoLatLng = null;
+    var b_coords_c3s = [[{miny}, {minx}], [{maxy}, {maxx}]];
 
     window.cambiarVar = function(tipo) {{
         window.varActiva = tipo;
@@ -239,14 +428,21 @@ def generar_mapa_interactivo(gdf, da_rh, da_t, barrios_stats, time_vals, lats, l
         document.getElementById('b-val').innerText = '--';
     }};
 
+    function forzarCaliC3S() {{
+        var map = window[window.map_id];
+        if (!map) return;
+        map.invalidateSize();
+        map.setView([{centro_lat}, {centro_lon}], 12);
+        map.fitBounds(b_coords_c3s, {{padding: [20, 20]}});
+    }}
+
     function iniciarControl() {{
         var map = window[window.map_id];
         var l_rh = window[window.rh_id];
         var map_div = document.getElementById(window.map_id);
-        if (!map || !l_rh || !map.timeDimension || !map_div) {{ setTimeout(iniciarControl, 150); return; }}
+        if (!map || !l_rh || !map.timeDimension || !map_div) {{ setTimeout(iniciarControl, 100); return; }}
         
-        map.invalidateSize();
-        map.fitBounds([[{miny}, {minx}], [{maxy}, {maxx}]]);
+        forzarCaliC3S();
 
         window.layer_t = L.timeDimension.layer.geoJson(L.geoJson(window.features_t, {{ style: function(f) {{ return f.properties.style; }} }}), {{ updateTimeDimension: false, duration: "{period_str}", period: "{period_str}" }});
         var caliInteractive = L.geoJson(window.cali_geojson, {{
@@ -275,18 +471,20 @@ def generar_mapa_interactivo(gdf, da_rh, da_t, barrios_stats, time_vals, lats, l
             window.actualizarPixel(window.ultimoLatLng);
         }});
 
-        setTimeout(function() {{
-            map.invalidateSize();
-            map.fitBounds([[{miny}, {minx}], [{maxy}, {maxx}]]);
-        }}, 300);
+        [200, 500, 1000, 2000].forEach(function(d){{
+            setTimeout(forzarCaliC3S, d);
+        }});
     }}
-    iniciarControl();
+    window.addEventListener('load', iniciarControl);
+    setTimeout(iniciarControl, 150);
     </script>
     """)
     m.get_root().html.add_child(panel_html)
     return m
+
+
 def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
-    if gdf.crs != "EPSG:4326":
+    if gdf.crs and gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
 
     ds = xr.open_dataset(nc_path)
@@ -310,6 +508,12 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
     m = folium.Map(
         location=[centro_lat, centro_lon],
         zoom_start=12,
+        min_zoom=9,
+        max_bounds=True,
+        min_lat=miny - 0.5,
+        max_lat=maxy + 0.5,
+        min_lon=minx - 0.5,
+        max_lon=maxx + 0.5,
         tiles="OpenStreetMap",
         width="100%",
         height="780px",
@@ -481,7 +685,7 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
     var map_id_ch = "{m.get_name()}";
     var barrioActivo_ch = null;
     var ultimoLatLng_ch = null;
-    var b_coords = [[{miny}, {minx}], [{maxy}, {maxx}]];
+    var b_coords_ch = [[{miny}, {minx}], [{maxy}, {maxx}]];
 
     function actPixelCh(ll) {{
         var g = grid_info_ch;
@@ -510,12 +714,21 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
         document.getElementById('b-val').innerText = (v !== null && v !== undefined) ? v + ' mm' : '--';
     }}
 
+    function forzarCaliCh() {{
+        var map = window[map_id_ch];
+        if (!map) return;
+        map.invalidateSize();
+        map.setView([{centro_lat}, {centro_lon}], 12);
+        map.fitBounds(b_coords_ch, {{padding: [20, 20]}});
+    }}
+
     function initChirps() {{
         var map = window[map_id_ch];
         var el = document.getElementById(map_id_ch);
         if (!map || !el) return setTimeout(initChirps, 100);
-        map.invalidateSize();
-        map.fitBounds(b_coords);
+
+        forzarCaliCh();
+
         L.geoJson({gdf[["b_id", "geometry"]].to_json()}, {{
             style: {{ fillColor: '#fff', fillOpacity: 0.01, color: 'transparent' }},
             onEachFeature: function(f, l) {{
@@ -528,21 +741,26 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
                 }});
             }}
         }}).addTo(map);
+
         if (map.timeDimension) {{
             map.timeDimension.on('timeload timechange', function() {{
                 if (barrioActivo_ch !== null) actBarrioCh(barrioActivo_ch);
                 if (ultimoLatLng_ch) actPixelCh(ultimoLatLng_ch);
             }});
         }}
+
         el.addEventListener('mousemove', function(e) {{
             ultimoLatLng_ch = map.mouseEventToLatLng(e);
             actPixelCh(ultimoLatLng_ch);
         }});
-        [200, 600, 1200].forEach(function(d){{
-            setTimeout(function(){{ map.invalidateSize(); map.fitBounds(b_coords); }}, d);
+
+        [200, 500, 1000, 2000].forEach(function(d){{
+            setTimeout(forzarCaliCh, d);
         }});
     }}
-    initChirps();
+
+    window.addEventListener('load', initChirps);
+    setTimeout(initChirps, 150);
     </script>
     """)
     m.get_root().html.add_child(panel_html)
