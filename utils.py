@@ -506,7 +506,7 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
         ds = xr.open_dataset(nc_path, engine="h5netcdf")
     except Exception:
         ds = xr.open_dataset(nc_path)
-    # ... resto del código igual
+
     da_p = ds["precipitation"]
     lat_col = "lat" if "lat" in da_p.coords else "latitude"
     lon_col = "lon" if "lon" in da_p.coords else "longitude"
@@ -527,12 +527,6 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
     m = folium.Map(
         location=[centro_lat, centro_lon],
         zoom_start=12,
-        min_zoom=9,
-        max_bounds=True,
-        min_lat=miny - 0.5,
-        max_lat=maxy + 0.5,
-        min_lon=minx - 0.5,
-        max_lon=maxx + 0.5,
         tiles="OpenStreetMap",
         width="100%",
         height="780px",
@@ -737,8 +731,7 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
         var map = window[map_id_ch];
         if (!map) return;
         map.invalidateSize();
-        map.setView([{centro_lat}, {centro_lon}], 12);
-        map.fitBounds(b_coords_ch, {{padding: [20, 20]}});
+        map.fitBounds(b_coords_ch);
     }}
 
     function initChirps() {{
@@ -773,7 +766,7 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
             actPixelCh(ultimoLatLng_ch);
         }});
 
-        [200, 500, 1000, 2000].forEach(function(d){{
+        [150, 400, 800].forEach(function(d){{
             setTimeout(forzarCaliCh, d);
         }});
     }}
