@@ -27,9 +27,6 @@ except Exception as e:
     st.error(f"Error cargando shapefile: {e}")
     st.stop()
 
-# =========================================================================
-# Navegación y Vistas
-# =========================================================================
 with st.sidebar:
     st.header("📌 Navegación")
     vista = st.radio(

@@ -547,3 +547,36 @@ def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
     """)
     m.get_root().html.add_child(panel_html)
     return m
+
+
+@st.cache_data(show_spinner=True)
+def cargar_y_procesar_estaciones(csv_path: Path):
+    # Cargar solo las columnas necesarias para mejorar velocidad
+    cols = [
+        'Estacion', 'Fecha', 'Precipitacion', 'Tmin', 'Tmax', 
+        'Humedad relativa', 'Velocidad del viento', 'Radiación solar', 
+        'Latitud', 'Longitud'
+    ]
+    df = pd.read_csv(csv_path, usecols=cols)
+    df['Fecha'] = pd.to_datetime(df['Fecha'])
+    df = df.sort_values(['Estacion', 'Fecha'])
+    
+    # Reglas de agregación semanal epidemiológica
+    reglas = {
+        'Precipitacion': 'sum',
+        'Tmin': 'mean',
+        'Tmax': 'mean',
+        'Humedad relativa': 'mean',
+        'Velocidad del viento': 'mean',
+        'Radiación solar': 'mean',
+        'Latitud': 'first',
+        'Longitud': 'first'
+    }
+    
+    # Agrupar por Estación y Semana
+    df_semanal = df.groupby(['Estacion', pd.Grouper(key='Fecha', freq='W-MON')]).agg(reglas).reset_index()
+    
+    # Coordenadas únicas por estación
+    estaciones_info = df[['Estacion', 'Latitud', 'Longitud']].drop_duplicates('Estacion').dropna()
+    
+    return df_semanal, estaciones_info
