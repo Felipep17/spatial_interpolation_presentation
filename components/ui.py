@@ -1,177 +1,216 @@
+from html import escape
+from pathlib import Path
+
 import streamlit as st
+
+from components.theme import COLORS
+
+_BADGE_TONES = {
+    "blue": ("#eef4fc", "#1c5cab", "#cde2fb"),
+    "violet": ("#f3f1fd", "#4a3aa7", "#dcd7f7"),
+    "green": ("#eef7ee", "#006300", "#cfe8cf"),
+    "gray": ("#f4f3ef", "#52514e", "#e1e0d9"),
+}
 
 
 def apply_custom_css():
-    """Aplica estilos CSS personalizados inspirados en interfaces analíticas modernas."""
-    st.markdown(
-        """
-        <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    """Capa CSS mínima sobre el tema nativo (.streamlit/config.toml)."""
+    c = COLORS
+    css = f"""
+    <style>
+    [data-testid="stMainBlockContainer"] {{
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1480px;
+    }}
 
-        html, body, [class*="css"] {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        }
+    /* Encabezado de página */
+    .gc-header {{
+        display: flex; align-items: flex-end; justify-content: space-between; gap: 24px;
+        padding-bottom: 18px; margin-bottom: 8px; border-bottom: 1px solid {c["grid"]};
+    }}
+    .gc-eyebrow {{
+        font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+        color: {c["accent"]}; margin-bottom: 6px;
+    }}
+    .gc-title {{
+        font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;
+        color: {c["ink"]}; margin: 0;
+    }}
+    .gc-subtitle {{ font-size: 14px; color: {c["ink_2"]}; margin: 6px 0 0 0; max-width: 760px; }}
+    .gc-badges {{ display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }}
 
-        /* Ajuste de contenedor principal */
-        .main .block-container {
-            padding-top: 1.8rem;
-            padding-bottom: 2.5rem;
-            padding-left: 2.5rem;
-            padding-right: 2.5rem;
-            max-width: 98% !important;
-        }
+    /* Insignias */
+    .gc-badge {{
+        display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+        padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 500;
+        border: 1px solid var(--gc-b); background: var(--gc-bg); color: var(--gc-fg);
+    }}
+    .gc-badge b {{ font-weight: 600; }}
 
-        /* Tarjetas de Métricas KPI */
-        .kpi-card {
-            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            padding: 16px 20px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
-            transition: all 0.2s ease-in-out;
-            margin-bottom: 12px;
-        }
-        .kpi-card:hover {
-            box-shadow: 0 6px 14px rgba(0,0,0,0.08);
-            transform: translateY(-2px);
-            border-color: #cbd5e1;
-        }
-        .kpi-title {
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #64748b;
-            margin-bottom: 6px;
-        }
-        .kpi-value {
-            font-size: 22px;
-            font-weight: 700;
-            color: #0f172a;
-            line-height: 1.2;
-        }
-        .kpi-subtitle {
-            font-size: 11px;
-            color: #94a3b8;
-            margin-top: 4px;
-        }
+    /* Títulos de sección */
+    .gc-section {{ margin: 22px 0 6px 0; }}
+    .gc-section h3 {{
+        font-size: 15px; font-weight: 600; color: {c["ink"]}; margin: 0; padding: 0;
+        letter-spacing: -0.005em;
+    }}
+    .gc-section p {{ font-size: 12.5px; color: {c["muted"]}; margin: 2px 0 0 0; }}
 
-        /* Encabezado Principal */
-        .page-header-container {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 12px 0 20px 0;
-            border-bottom: 1px solid #e2e8f0;
-            margin-bottom: 20px;
-        }
-        .page-title {
-            font-size: 26px;
-            font-weight: 800;
-            color: #0f172a;
-            letter-spacing: -0.02em;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .page-subtitle {
-            font-size: 13px;
-            color: #64748b;
-            margin-top: 4px;
-            margin-bottom: 0;
-        }
+    /* Tarjetas de métricas (st.metric con borde) */
+    [data-testid="stMetric"] {{
+        background: {c["surface"]};
+        box-shadow: 0 1px 2px rgba(11,11,11,0.04);
+        transition: box-shadow .18s ease, transform .18s ease, border-color .18s ease;
+    }}
+    [data-testid="stMetric"]:hover {{
+        box-shadow: 0 6px 18px rgba(11,11,11,0.07);
+        transform: translateY(-1px);
+    }}
+    [data-testid="stMetricLabel"] p {{
+        font-size: 12px; font-weight: 500; color: {c["ink_2"]};
+    }}
 
-        /* Badges e Insignias */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 10px;
-            border-radius: 9999px;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.02em;
-        }
-        .badge-blue {
-            background-color: #eff6ff;
-            color: #1d4ed8;
-            border: 1px solid #bfdbfe;
-        }
-        .badge-green {
-            background-color: #f0fdf4;
-            color: #15803d;
-            border: 1px solid #bbf7d0;
-        }
-        .badge-purple {
-            background-color: #faf5ff;
-            color: #7e22ce;
-            border: 1px solid #e9d5ff;
-        }
+    /* Mapas y gráficos dentro de tarjeta */
+    .gc-frame-note {{ font-size: 12px; color: {c["muted"]}; margin-top: 4px; }}
 
-        /* Tarjeta informativa */
-        .info-panel {
-            background-color: #f8fafc;
-            border-left: 4px solid #3b82f6;
-            border-radius: 6px;
-            padding: 12px 16px;
-            margin-bottom: 16px;
-            color: #334155;
-            font-size: 13px;
-        }
+    /* Leyenda continua (fuera de mapas) */
+    .gc-legend {{ max-width: 360px; margin-top: 6px; }}
+    .gc-legend-title {{ font-size: 12px; font-weight: 600; color: {c["ink"]}; margin-bottom: 5px; }}
+    .gc-legend-title span {{ font-weight: 400; color: {c["muted"]}; }}
+    .gc-legend-bar {{ height: 10px; border-radius: 3px; }}
+    .gc-legend-ticks {{
+        display: flex; justify-content: space-between; font-size: 10.5px; color: {c["ink_2"]};
+        margin-top: 3px; font-variant-numeric: tabular-nums;
+    }}
+    .gc-legend-note {{ font-size: 10px; color: {c["muted"]}; margin-top: 2px; }}
 
-        /* Footer */
-        .footer-container {
-            margin-top: 40px;
-            padding-top: 16px;
-            border-top: 1px solid #e2e8f0;
-            text-align: center;
-            color: #94a3b8;
-            font-size: 12px;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    /* Estado vacío */
+    .gc-empty {{
+        border: 1px dashed {c["axis"]}; border-radius: 12px; padding: 36px 24px;
+        text-align: center; background: {c["surface"]};
+    }}
+    .gc-empty .gc-empty-title {{ font-weight: 600; color: {c["ink"]}; font-size: 15px; }}
+    .gc-empty .gc-empty-body {{ color: {c["ink_2"]}; font-size: 13px; margin-top: 4px; }}
+
+    /* Barra lateral */
+    .gc-side-label {{
+        font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+        color: {c["muted"]}; margin: 14px 0 6px 0;
+    }}
+    .gc-side-grid {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+    .gc-side-meta {{ font-size: 12px; color: {c["ink_2"]}; line-height: 1.55; }}
+    .gc-side-meta code {{ font-size: 11px; background: {c["surface_alt"]}; padding: 1px 5px; border-radius: 4px; }}
+
+    /* Footer */
+    .gc-footer {{
+        margin-top: 4px; padding-top: 14px;
+        display: flex; justify-content: space-between; color: {c["muted"]}; font-size: 12px;
+    }}
+
+    /* Franja institucional compacta en la parte superior */
+    .st-key-gc_topbar {{ margin-bottom: -4px; }}
+    @media (max-width: 640px) {{ .st-key-gc_topbar {{ display: none; }} }}  /* en móvil queda en el footer */
+
+    /* Franja institucional (aliados y financiador) */
+    .st-key-gc_aliados {{
+        margin-top: 48px; background: #ffffff; padding: 18px 24px 14px;
+    }}
+    .gc-aliados-label {{
+        font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+        color: {c["muted"]}; text-align: center;
+    }}
+    </style>
+    """
+    st.html(css)
 
 
-def render_header(title: str, subtitle: str, badge_text: str = None, badge_type: str = "blue"):
-    """Renderiza un encabezado moderno estilizado."""
-    badge_html = f'<span class="badge badge-{badge_type}">{badge_text}</span>' if badge_text else ""
-    st.markdown(
+def badge_html(text: str, tone: str = "gray", strong: str | None = None) -> str:
+    bg, fg, border = _BADGE_TONES.get(tone, _BADGE_TONES["gray"])
+    label = f"{escape(text)} <b>{escape(strong)}</b>" if strong else escape(text)
+    return f'<span class="gc-badge" style="--gc-bg:{bg};--gc-fg:{fg};--gc-b:{border};">{label}</span>'
+
+
+def render_header(title: str, subtitle: str, eyebrow: str | None = None, badges: list[tuple] | None = None):
+    """Encabezado de página: antetítulo, título, descripción e insignias de contexto."""
+    eyebrow_html = f'<div class="gc-eyebrow">{escape(eyebrow)}</div>' if eyebrow else ""
+    badges_html = "".join(badge_html(*b) for b in (badges or []))
+    st.html(
         f"""
-        <div class="page-header-container">
+        <div class="gc-header">
             <div>
-                <h1 class="page-title">{title}</h1>
-                <p class="page-subtitle">{subtitle}</p>
+                {eyebrow_html}
+                <h1 class="gc-title">{escape(title)}</h1>
+                <p class="gc-subtitle">{escape(subtitle)}</p>
             </div>
-            <div>{badge_html}</div>
+            <div class="gc-badges">{badges_html}</div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_kpi_card(title: str, value: str, subtitle: str = ""):
-    """Renderiza una tarjeta KPI con estilo refinado."""
-    st.markdown(
-        f"""
-        <div class="kpi-card">
-            <div class="kpi-title">{title}</div>
-            <div class="kpi-value">{value}</div>
-            <div class="kpi-subtitle">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_footer():
-    """Renderiza el pie de página institucional."""
-    st.markdown(
         """
-        <div class="footer-container">
-            Plataforma de Análisis Espaciotemporal y Monitoreo Hidrometeorológico • Santiago de Cali
+    )
+
+
+def section_title(title: str, caption: str | None = None):
+    cap = f"<p>{escape(caption)}</p>" if caption else ""
+    st.html(f'<div class="gc-section"><h3>{escape(title)}</h3>{cap}</div>')
+
+
+def metric_card(
+    label: str,
+    value: str,
+    *,
+    delta=None,
+    delta_description: str | None = None,
+    delta_color: str = "off",
+    neutral_delta: bool = False,
+    chart=None,
+    chart_type: str = "line",
+    help: str | None = None,
+):
+    """Tarjeta KPI nativa con micro-gráfico opcional y contexto comparativo."""
+    st.metric(
+        label,
+        value,
+        delta=delta,
+        delta_color=delta_color,
+        delta_arrow="off" if neutral_delta else "auto",
+        delta_description=delta_description,
+        chart_data=chart,
+        chart_type=chart_type,
+        border=True,
+        help=help,
+        height=156,  # altura uniforme con o sin micro-gráfico
+    )
+
+
+def empty_state(title: str, body: str):
+    st.html(
+        f"""
+        <div class="gc-empty">
+            <div class="gc-empty-title">{escape(title)}</div>
+            <div class="gc-empty-body">{escape(body)}</div>
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
+    )
+
+
+def sidebar_label(text: str):
+    st.html(f'<div class="gc-side-label">{escape(text)}</div>')
+
+
+def render_footer(aliados_png: Path | None = None):
+    """Pie de página con la franja institucional del proyecto, si existe el PNG de aliados."""
+    if aliados_png and aliados_png.exists():
+        with st.container(border=True, key="gc_aliados", horizontal_alignment="center", gap="small"):
+            st.html('<div class="gc-aliados-label">Proyecto Dengue.IA Cali · Alianza institucional</div>')
+            st.image(
+                str(aliados_png),
+                width=900,
+                caption=None,
+            )
+    st.html(
+        """
+        <div class="gc-footer">
+            <span>GeoClima Cali · Análisis espaciotemporal hidrometeorológico</span>
+            <span>Santiago de Cali, Colombia</span>
+        </div>
+        """
     )

@@ -1,79 +1,116 @@
 from pathlib import Path
+
 import streamlit as st
-from components.ui import apply_custom_css, render_footer
-from utils import cargar_shapefile
+
+from components.ui import apply_custom_css, badge_html, render_footer, sidebar_label
+from utils import cargar_shapefile, listar_fuentes
 from views import estaciones, satelital
 
-# Configuración de página
 st.set_page_config(
-    page_title="Plataforma de Análisis Espacial Cali",
-    page_icon="🗺️",
+    page_title="GeoClima Cali",
+    page_icon=":material/public:",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# Inyección de estilos modernos
 apply_custom_css()
 
 # =========================================================================
-# RUTA DINÁMICA: Directorio raíz de la aplicación
+# Rutas
 # =========================================================================
 BASE_DIR = Path(__file__).resolve().parent
 INPUTS_PATH = BASE_DIR / "inputs"
+ASSETS_PATH = BASE_DIR / "assets"
 
 if not INPUTS_PATH.exists():
-    st.error(f"❌ No se encontró la carpeta 'inputs' en: {INPUTS_PATH}")
-    st.info("Asegúrate de que la carpeta 'inputs' esté presente en el proyecto.")
+    st.error(f"No se encontró la carpeta 'inputs' en: {INPUTS_PATH}")
     st.stop()
 
 # =========================================================================
-# Cargar Capa Vectorial (Shapefile/GeoParquet)
+# Capa vectorial de referencia
 # =========================================================================
-with st.spinner("Cargando capa vectorial de referencia..."):
-    try:
-        gdf = cargar_shapefile(INPUTS_PATH / "shapefiles")
-    except Exception as e:
-        st.error(f"Error cargando archivo vectorial: {e}")
-        st.stop()
+try:
+    gdf = cargar_shapefile(INPUTS_PATH / "shapefiles")
+except FileNotFoundError as e:
+    st.error(f"No se encontró la capa vectorial de barrios: {e}")
+    st.stop()
+except Exception as e:  # lectura/reproyección
+    st.error(f"No fue posible leer la capa vectorial: {e}")
+    st.stop()
 
 # =========================================================================
-# Barra Lateral (Sidebar)
+# Navegación nativa: solo se ejecuta la página activa
 # =========================================================================
-with st.sidebar:
-    st.markdown(
-        """
-        <div style="padding: 10px 0 15px 0;">
-            <div style="font-size: 18px; font-weight: 800; color: #1e293b;">🌐 GeoClima Cali</div>
-            <div style="font-size: 12px; color: #64748b;">Sistema de Monitoreo & Asimilación</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("### 🧭 Módulo de Visualización")
-    vista = st.radio(
-        "Seleccione el enfoque:",
-        ["Fuentes Satelitales", "Estaciones Meteorológicas"],
-        label_visibility="collapsed",
-    )
-
-    st.markdown("---")
-    st.markdown("### 📍 Contexto Espacial")
-    col_sb1, col_sb2 = st.columns(2)
-    with col_sb1:
-        st.metric("Barrios/Polígonos", len(gdf))
-    with col_sb2:
-        st.metric("CRS Base", "EPSG:4326")
-
-    st.markdown("---")
-    st.caption("ℹ️ Datos integrados desde sensores in-situ, Copernicus C3S y CHIRPS 3.0.")
-
-# =========================================================================
-# Enrutamiento de Vistas
-# =========================================================================
-if vista == "Fuentes Satelitales":
+def _pagina_satelital():
     satelital.render(gdf, INPUTS_PATH)
-elif vista == "Estaciones Meteorológicas":
+
+
+def _pagina_estaciones():
     estaciones.render(gdf, INPUTS_PATH)
 
-render_footer()
+
+paginas = {
+    "Módulos": [
+        # La página por defecto siempre se sirve en "/"
+        st.Page(_pagina_satelital, title="Fuentes satelitales", icon=":material/satellite_alt:", default=True),
+        st.Page(_pagina_estaciones, title="Estaciones in situ", icon=":material/sensors:",
+                url_path="estaciones"),
+    ]
+}
+
+st.logo(ASSETS_PATH / "logo.svg", icon_image=ASSETS_PATH / "icon.svg", size="large")
+nav = st.navigation(paginas, position="sidebar")
+
+# =========================================================================
+# Barra lateral: contexto espacial y metadatos
+# =========================================================================
+with st.sidebar:
+    epsg = gdf.crs.to_epsg() if gdf.crs else None
+    minx, miny, maxx, maxy = gdf.total_bounds
+
+    sidebar_label("Contexto espacial")
+    st.html(
+        '<div class="gc-side-grid">'
+        + badge_html("CRS", "blue", f"EPSG:{epsg}" if epsg else "sin definir")
+        + badge_html("Polígonos", "gray", f"{len(gdf):,}")
+        + "</div>"
+    )
+    st.html(
+        f"""
+        <div class="gc-side-meta" style="margin-top:8px;">
+            Lat <code>{miny:.3f}° → {maxy:.3f}°</code><br>
+            Lon <code>{minx:.3f}° → {maxx:.3f}°</code>
+        </div>
+        """
+    )
+
+    sidebar_label("Fuentes de datos")
+    fuentes = listar_fuentes(INPUTS_PATH / "raster")
+    chips = [
+        badge_html(nombre, "violet" if archivos else "gray", str(len(archivos)))
+        for nombre, archivos in fuentes.items()
+    ]
+    if (INPUTS_PATH / "climaticas_post_calidad.csv").exists():
+        chips.append(badge_html("Estaciones", "green", "CSV"))
+    st.html(f'<div class="gc-side-grid">{"".join(chips)}</div>')
+
+    st.caption("Sensores in situ, Copernicus C3S (AgERA5) y CHIRPS v3.0.")
+
+# Franja institucional compacta (arriba a la derecha) visible al abrir cualquier página
+LOGO_ALIADOS = INPUTS_PATH / "logo.png"
+
+
+@st.cache_resource
+def _logo_recortado(ruta: Path, mtime: float):
+    """Recorta el margen transparente del PNG para que los logos se vean más grandes."""
+    from PIL import Image
+
+    img = Image.open(ruta)
+    return img.crop(img.getchannel("A").getbbox()) if img.mode == "RGBA" else img
+
+
+if LOGO_ALIADOS.exists():
+    with st.container(horizontal=True, horizontal_alignment="right", key="gc_topbar"):
+        st.image(_logo_recortado(LOGO_ALIADOS, LOGO_ALIADOS.stat().st_mtime), width=440)
+
+nav.run()
+render_footer(LOGO_ALIADOS)

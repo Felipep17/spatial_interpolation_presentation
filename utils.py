@@ -1,23 +1,45 @@
 import json
+import warnings
 from pathlib import Path
-import branca.colormap as bcm
-from branca.element import Element
+
 import folium
-from folium.plugins import TimestampedGeoJson
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.geometry import box
+import shapely
 import streamlit as st
 import xarray as xr
+from branca.element import Element, MacroElement
+from folium.plugins import TimestampedGeoJson
+from jinja2 import Template
+
+from components.theme import (
+    COLORS,
+    FONT_STACK,
+    FONT_URL,
+    RASTER_VARS,
+    BARRIO_LINE,
+    RASTER_OPACITY,
+    TILES_ATTR,
+    TILES_URL,
+    colormap,
+    escala_robusta,
+    leyenda_html,
+)
+
+# Cámara compartida por todos los mapas: mismo centro y zoom => sin saltos al cambiar de fuente
+MAP_ZOOM = 11.75
 
 
+# =========================================================================
+# Carga de datos
+# =========================================================================
 @st.cache_data
 def cargar_shapefile(carpeta: Path):
     formatos = ["*.parquet", "*.shp", "*.geojson", "*.gpkg"]
     arch = None
     for fmt in formatos:
-        hits = list(carpeta.glob(fmt))
+        hits = sorted(carpeta.glob(fmt))
         if hits:
             arch = hits[0]
             break
@@ -40,31 +62,28 @@ def listar_fuentes(raster_dir: Path):
 def cargar_recorte_nc(nc_path: Path, bounds, res=0.1):
     minx, miny, maxx, maxy = bounds
     pad = res / 2
-    ds = xr.open_dataset(nc_path)
-    vars_validas = [
-        v for v in ds.data_vars if len(ds[v].dims) >= 2 and v not in ["spatial_ref", "crs"]
-    ]
-    var_name = vars_validas[0] if vars_validas else list(ds.data_vars)[0]
-    da = ds[var_name]
-    lat_col = next(
-        c for c in list(da.coords) + list(da.dims) if c.lower() in ["latitude", "lat", "y"]
-    )
-    lon_col = next(
-        c for c in list(da.coords) + list(da.dims) if c.lower() in ["longitude", "lon", "x"]
-    )
-    minx_s, maxx_s = (
-        (minx + 360, maxx + 360)
-        if (float(da[lon_col].min()) >= 0 and minx < 0)
-        else (minx, maxx)
-    )
-    lat_slice = (
-        slice(maxy + pad, miny - pad)
-        if da[lat_col].values[0] > da[lat_col].values[-1]
-        else slice(miny - pad, maxy + pad)
-    )
-    lon_slice = slice(minx_s - pad, maxx_s + pad)
-    da = da.sel({lat_col: lat_slice, lon_col: lon_slice})
-    if float(ds[lon_col].min()) >= 0 and minx < 0:
+    with xr.open_dataset(nc_path) as ds:
+        vars_validas = [
+            v for v in ds.data_vars if len(ds[v].dims) >= 2 and v not in ["spatial_ref", "crs"]
+        ]
+        var_name = vars_validas[0] if vars_validas else list(ds.data_vars)[0]
+        da = ds[var_name]
+        lat_col = next(
+            c for c in list(da.coords) + list(da.dims) if c.lower() in ["latitude", "lat", "y"]
+        )
+        lon_col = next(
+            c for c in list(da.coords) + list(da.dims) if c.lower() in ["longitude", "lon", "x"]
+        )
+        lon_0_360 = float(ds[lon_col].min()) >= 0 and minx < 0
+        minx_s, maxx_s = (minx + 360, maxx + 360) if lon_0_360 else (minx, maxx)
+        lat_slice = (
+            slice(maxy + pad, miny - pad)
+            if da[lat_col].values[0] > da[lat_col].values[-1]
+            else slice(miny - pad, maxy + pad)
+        )
+        lon_slice = slice(minx_s - pad, maxx_s + pad)
+        da = da.sel({lat_col: lat_slice, lon_col: lon_slice}).load()
+    if lon_0_360:
         da = da.assign_coords({lon_col: da[lon_col] - 360})
     if (
         "temp" in var_name.lower()
@@ -75,616 +94,391 @@ def cargar_recorte_nc(nc_path: Path, bounds, res=0.1):
     return da, lat_col, lon_col, pad
 
 
-def calcular_estadisticas_zonales(
-    gdf: gpd.GeoDataFrame,
-    da_rh: xr.DataArray,
-    da_t: xr.DataArray,
-    lat_col: str,
-    lon_col: str,
-    pad: float,
-):
-    lats = da_rh[lat_col].values
-    lons = da_rh[lon_col].values
-    time_vals = pd.to_datetime(da_rh.time.values)
-    pixel_boxes = [
-        {
-            "i": i,
-            "j": j,
-            "geom": box(lon - pad, lat - pad, lon + pad, lat + pad),
-        }
-        for i, lat in enumerate(lats)
-        for j, lon in enumerate(lons)
-    ]
-    col_nombre = next((c for c in gdf.columns if c.lower() == "nombre"), gdf.columns[0])
-    gdf["b_id"] = list(range(len(gdf)))
-    gdf["nombre_barrio"] = gdf[col_nombre].astype(str)
-    barrios_stats = []
-    for idx, row in gdf.iterrows():
-        b_geom = row.geometry
-        touching = [p for p in pixel_boxes if b_geom.intersects(p["geom"])]
-        rh_prom, t_prom = [], []
-        for ti in range(len(time_vals)):
-            v_rh = [float(da_rh.isel(time=ti).values[p["i"], p["j"]]) for p in touching]
-            v_t = [float(da_t.isel(time=ti).values[p["i"], p["j"]]) for p in touching]
-            v_rh = [v for v in v_rh if not np.isnan(v)]
-            v_t = [v for v in v_t if not np.isnan(v)]
-            rh_prom.append(round(float(np.mean(v_rh)), 1) if v_rh else None)
-            t_prom.append(round(float(np.mean(v_t)), 1) if v_t else None)
-        barrios_stats.append(
-            {
-                "id": int(idx),
-                "nom": str(row["nombre_barrio"]),
-                "n_pix": int(len(touching)),
-                "rh": rh_prom,
-                "t": t_prom,
-            }
-        )
-    gdf["n_pixeles"] = [b["n_pix"] for b in barrios_stats]
-    return barrios_stats, time_vals, lats, lons
-
-
-def generar_mapa_interactivo(
-    gdf, da_rh, da_t, barrios_stats, time_vals, lats, lons, pad, *args, **kwargs
-):
-    minx, miny, maxx, maxy = gdf.total_bounds
-    centro_lat = (miny + maxy) / 2
-    centro_lon = (minx + maxx) / 2
-    m = folium.Map(
-        location=[centro_lat, centro_lon],
-        zoom_start=12,
-        tiles="OpenStreetMap",
-        width="100%",
-        height="780px",
-    )
-
-    vmin_rh, vmax_rh = round(float(np.nanmin(da_rh.values)), 1), round(
-        float(np.nanmax(da_rh.values)), 1
-    )
-    vmin_t, vmax_t = round(float(np.nanmin(da_t.values)), 1), round(
-        float(np.nanmax(da_t.values)), 1
-    )
-    cm_rh = bcm.linear.viridis.scale(vmin_rh, vmax_rh)
-    cm_t = bcm.linear.YlOrRd_09.scale(vmin_t, vmax_t)
-
-    if len(time_vals) > 1:
-        dt_hours = max(1, int((time_vals[1] - time_vals[0]).total_seconds() / 3600))
-        period_str = f"P{dt_hours // 24}D" if dt_hours >= 24 else f"PT{dt_hours}H"
-        date_fmt = "YYYY-MM-DD" if dt_hours >= 24 else "YYYY-MM-DD HH:mm"
-    else:
-        period_str = "P1D"
-        date_fmt = "YYYY-MM-DD"
-
-    features_rh, features_t = [], []
-    for t_idx, t in enumerate(time_vals):
-        iso_time = t.isoformat()
-        vals_rh = da_rh.isel(time=t_idx).values
-        vals_t = da_t.isel(time=t_idx).values
-        for i, lat_val in enumerate(lats):
-            for j, lon_val in enumerate(lons):
-                v_rh, v_t = float(vals_rh[i, j]), float(vals_t[i, j])
-                coords = [
-                    [
-                        [lon_val - pad, lat_val - pad],
-                        [lon_val + pad, lat_val - pad],
-                        [lon_val + pad, lat_val + pad],
-                        [lon_val - pad, lat_val + pad],
-                        [lon_val - pad, lat_val - pad],
-                    ]
-                ]
-                if not np.isnan(v_rh):
-                    features_rh.append(
-                        {
-                            "type": "Feature",
-                            "geometry": {"type": "Polygon", "coordinates": coords},
-                            "properties": {
-                                "times": [iso_time],
-                                "style": {
-                                    "fillColor": cm_rh(v_rh),
-                                    "fillOpacity": 0.38,
-                                    "color": "white",
-                                    "weight": 0.3,
-                                },
-                            },
-                        }
-                    )
-                if not np.isnan(v_t):
-                    features_t.append(
-                        {
-                            "type": "Feature",
-                            "geometry": {"type": "Polygon", "coordinates": coords},
-                            "properties": {
-                                "times": [iso_time],
-                                "style": {
-                                    "fillColor": cm_t(v_t),
-                                    "fillOpacity": 0.38,
-                                    "color": "white",
-                                    "weight": 0.3,
-                                },
-                            },
-                        }
-                    )
-
-    tg_rh = TimestampedGeoJson(
-        {"type": "FeatureCollection", "features": features_rh},
-        period=period_str,
-        duration=period_str,
-        add_last_point=False,
-        auto_play=False,
-        loop=False,
-        max_speed=5,
-        loop_button=True,
-        date_options=date_fmt,
-        time_slider_drag_update=True,
-    )
-    tg_rh.add_to(m)
-
-    folium.GeoJson(
-        gdf,
-        name="Límites Cali",
-        show=True,
-        style_function=lambda x: {
-            "fillColor": "#ffffff",
-            "fillOpacity": 0.04,
-            "color": "#111111",
-            "weight": 1.2,
-        },
-        highlight_function=lambda x: {
-            "weight": 2.5,
-            "color": "#000000",
-            "fillOpacity": 0.20,
-        },
-        tooltip=folium.GeoJsonTooltip(
-            fields=["nombre_barrio", "n_pixeles"],
-            aliases=["Barrio:", "No. Píxeles:"],
-            localize=True,
-            sticky=True,
-            style="background-color: white; border-radius: 4px; padding: 6px; font-weight: bold; border: 1px solid #444;",
-        ),
-    ).add_to(m)
-
-    folium.LayerControl(position="topright", collapsed=False).add_to(m)
-
-    grid_data = {
-        "lats": [float(x) for x in lats],
-        "lons": [float(x) for x in lons],
-        "pad": float(pad),
-        "rh": [
-            [
-                [
-                    None if np.isnan(v) else round(float(v), 1)
-                    for v in da_rh.isel(time=t_i).values[i]
-                ]
-                for i in range(len(lats))
-            ]
-            for t_i in range(len(time_vals))
-        ],
-        "t": [
-            [
-                [
-                    None if np.isnan(v) else round(float(v), 1)
-                    for v in da_t.isel(time=t_i).values[i]
-                ]
-                for i in range(len(lats))
-            ]
-            for t_i in range(len(time_vals))
-        ],
-    }
-
-    panel_html = Element(
-        f"""
-    <div id="panel-control" style="position: absolute; top: 14px; left: 55px; z-index: 1000; background: white; padding: 12px 16px; border-radius: 8px; box-shadow: 0 3px 10px rgba(0,0,0,0.25); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; width: 240px;">
-        <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px; border-bottom: 1px solid #eee; padding-bottom: 4px;">📊 Variable Activa</div>
-        <label style="cursor: pointer; display: block; margin-bottom: 3px; font-size: 13px;"><input type="radio" name="rad_var" value="rh" checked onchange="window.cambiarVar('rh')"> Humedad Relativa</label>
-        <label style="cursor: pointer; display: block; margin-bottom: 3px; font-size: 13px;"><input type="radio" name="rad_var" value="t" onchange="window.cambiarVar('t')"> Temp. Máxima</label>
-        <label style="cursor: pointer; display: block; margin-bottom: 8px; font-size: 13px; color: #555;"><input type="radio" name="rad_var" value="none" onchange="window.cambiarVar('none')"> Ocultar Raster</label>
-        <div id="barra-rh">
-            <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #444;"><span>{vmin_rh}%</span><span>{((vmin_rh + vmax_rh)/2):.1f}%</span><span>{vmax_rh}%</span></div>
-            <div style="height: 12px; border-radius: 3px; background: linear-gradient(to right, #440154, #3b528b, #21918c, #5ec962, #fde725); border: 1px solid #aaa; margin: 3px 0;"></div>
-            <div style="text-align: center; font-size: 10px; color: #666;">Humedad Relativa (%)</div>
-        </div>
-        <div id="barra-t" style="display: none;">
-            <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #444;"><span>{vmin_t}°C</span><span>{((vmin_t + vmax_t)/2):.1f}°C</span><span>{vmax_t}°C</span></div>
-            <div style="height: 12px; border-radius: 3px; background: linear-gradient(to right, #ffffb2, #fed976, #feb24c, #fd8d3c, #f03b20, #bd0026); border: 1px solid #aaa; margin: 3px 0;"></div>
-            <div style="text-align: center; font-size: 10px; color: #666;">Temperatura Máxima (°C)</div>
-        </div>
-        <div id="box-valor" style="margin-top: 8px; padding: 5px 8px; background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 4px;">
-            <div style="font-size: 10px; color: #6c757d; text-transform: uppercase;">Pixel bajo el cursor:</div>
-            <div id="txt-valor" style="font-size: 15px; font-weight: bold; color: #0d6efd;">--</div>
-        </div>
-        <div id="box-barrio" style="margin-top: 8px; padding: 6px 8px; background: #eef4fc; border: 1px solid #d5e4f7; border-radius: 4px; font-size: 11px;">
-            <div style="font-weight: bold; color: #1e4273; border-bottom: 1px solid #c8dcf5; padding-bottom: 2px; margin-bottom: 3px;">📍 Barrio Seleccionado:</div>
-            <div><b>Nombre:</b> <span id="b-nom">--</span></div>
-            <div><b>No. Píxeles:</b> <span id="b-pix">--</span></div>
-            <div><b>Promedio Zonal:</b> <span id="b-val" style="font-weight: bold; color: #d9381e;">--</span></div>
-        </div>
-    </div>
-    <script>
-    window.grid_info = {json.dumps(grid_data)};
-    window.barrios_info = {json.dumps(barrios_stats)};
-    window.cali_geojson = {gdf[["b_id", "geometry"]].to_json()};
-    window.features_t = {json.dumps({"type": "FeatureCollection", "features": features_t})};
-    window.varActiva = 'rh';
-    window.map_id = "{m.get_name()}";
-    window.rh_id = "{tg_rh.get_name()}";
-    window.layer_t = null;
-    window.barrioActivoIdx = null;
-    window.caliLayerVisible = true;
-    window.ultimoLatLng = null;
-
-    window.cambiarVar = function(tipo) {{
-        window.varActiva = tipo;
-        var b_rh = document.getElementById('barra-rh');
-        var b_t = document.getElementById('barra-t');
-        var box_val = document.getElementById('box-valor');
-        var map = window[window.map_id];
-        var l_rh = window[window.rh_id];
-        var l_t = window.layer_t;
-        if (tipo === 't') {{
-            if (b_rh) b_rh.style.display = 'none';
-            if (b_t) b_t.style.display = 'block';
-            if (box_val) box_val.style.display = 'block';
-            if (map && l_rh && l_t) {{ map.removeLayer(l_rh); map.addLayer(l_t); if (l_t._onNewTimeDimensionAvailable) l_t._onNewTimeDimensionAvailable(); }}
-        }} else if (tipo === 'rh') {{
-            if (b_t) b_t.style.display = 'none';
-            if (b_rh) b_rh.style.display = 'block';
-            if (box_val) box_val.style.display = 'block';
-            if (map && l_rh && l_t) {{ map.removeLayer(l_t); map.addLayer(l_rh); if (l_rh._onNewTimeDimensionAvailable) l_rh._onNewTimeDimensionAvailable(); }}
-        }} else {{
-            if (b_rh) b_rh.style.display = 'none';
-            if (b_t) b_t.style.display = 'none';
-            if (box_val) box_val.style.display = 'none';
-            if (map && l_rh && l_t) {{ map.removeLayer(l_rh); map.removeLayer(l_t); }}
-        }}
-        if (window.ultimoLatLng) window.actualizarPixel(window.ultimoLatLng);
-        if (window.barrioActivoIdx !== null) window.actualizarInfoBarrio(window.barrioActivoIdx);
-    }};
-
-    window.actualizarPixel = function(latlng) {{
-        var lat = latlng.lat, lon = latlng.lng, g = window.grid_info;
-        var i_lat = -1;
-        for (var i = 0; i < g.lats.length; i++) {{ if (Math.abs(lat - g.lats[i]) <= g.pad) {{ i_lat = i; break; }} }}
-        var j_lon = -1;
-        for (var j = 0; j < g.lons.length; j++) {{ if (Math.abs(lon - g.lons[j]) <= g.pad) {{ j_lon = j; break; }} }}
-        var el = document.getElementById('txt-valor');
-        var map = window[window.map_id];
-        if (el && i_lat !== -1 && j_lon !== -1) {{
-            var t_idx = 0;
-            if (map && map.timeDimension) {{ t_idx = map.timeDimension.getCurrentTimeIndex(); if (t_idx < 0) t_idx = 0; }}
-            var val = (window.varActiva === 'rh') ? g.rh[t_idx][i_lat][j_lon] : g.t[t_idx][i_lat][j_lon];
-            el.innerText = (val !== null && val !== undefined) ? ((window.varActiva === 'rh') ? val + ' %' : val + ' °C') : '--';
-        }} else if (el) {{
-            el.innerText = '--';
-        }}
-    }};
-
-    window.actualizarInfoBarrio = function(idx) {{
-        if (!window.caliLayerVisible) return;
-        window.barrioActivoIdx = idx;
-        var b = window.barrios_info[idx];
-        if (!b) return;
-        document.getElementById('b-nom').innerText = b.nom;
-        document.getElementById('b-pix').innerText = b.n_pix;
-        var map = window[window.map_id];
-        var t_idx = 0;
-        if (map && map.timeDimension) {{ t_idx = map.timeDimension.getCurrentTimeIndex(); if (t_idx < 0) t_idx = 0; }}
-        var elVal = document.getElementById('b-val');
-        if (window.varActiva === 'none') {{ elVal.innerText = 'Raster Oculto'; }}
-        else if (window.varActiva === 'rh') {{ var v = b.rh[t_idx]; elVal.innerText = (v !== null ? v + ' %' : '--'); }}
-        else {{ var v = b.t[t_idx]; elVal.innerText = (v !== null ? v + ' °C' : '--'); }}
-    }};
-
-    window.limpiarInfoBarrio = function() {{
-        window.barrioActivoIdx = null;
-        document.getElementById('b-nom').innerText = '--';
-        document.getElementById('b-pix').innerText = '--';
-        document.getElementById('b-val').innerText = '--';
-    }};
-
-    function iniciarControl() {{
-        var map = window[window.map_id];
-        var l_rh = window[window.rh_id];
-        var map_div = document.getElementById(window.map_id);
-        if (!map || !l_rh || !map.timeDimension || !map_div) {{ setTimeout(iniciarControl, 150); return; }}
-        
-        map.invalidateSize();
-        map.fitBounds([[{miny}, {minx}], [{maxy}, {maxx}]]);
-
-        window.layer_t = L.timeDimension.layer.geoJson(L.geoJson(window.features_t, {{ style: function(f) {{ return f.properties.style; }} }}), {{ updateTimeDimension: false, duration: "{period_str}", period: "{period_str}" }});
-        var caliInteractive = L.geoJson(window.cali_geojson, {{
-            style: {{ fillColor: '#ffffff', fillOpacity: 0.01, color: 'transparent', weight: 1 }},
-            onEachFeature: function(feature, layer) {{
-                layer.on({{
-                    mouseover: function(e) {{ if (feature.properties && feature.properties.b_id !== undefined) {{ window.actualizarInfoBarrio(feature.properties.b_id); }} }},
-                    mouseout: function(e) {{ window.limpiarInfoBarrio(); }}
-                }});
-            }}
-        }}).addTo(map);
-
-        map.timeDimension.on('timeload timechange', function() {{
-            if (window.barrioActivoIdx !== null) window.actualizarInfoBarrio(window.barrioActivoIdx);
-            if (window.ultimoLatLng) window.actualizarPixel(window.ultimoLatLng);
-        }});
-        map.on('overlayremove', function(e) {{
-            if (e.name === "Límites Cali") {{ window.caliLayerVisible = false; window.limpiarInfoBarrio(); map.removeLayer(caliInteractive); document.getElementById('b-nom').innerText = 'Capa Desactivada'; }}
-        }});
-        map.on('overlayadd', function(e) {{
-            if (e.name === "Límites Cali") {{ window.caliLayerVisible = true; window.limpiarInfoBarrio(); map.addLayer(caliInteractive); }}
-        }});
-        map_div.addEventListener('mousemove', function(e) {{
-            if (window.varActiva === 'none') return;
-            window.ultimoLatLng = map.mouseEventToLatLng(e);
-            window.actualizarPixel(window.ultimoLatLng);
-        }});
-
-        setTimeout(function() {{
-            map.invalidateSize();
-            map.fitBounds([[{miny}, {minx}], [{maxy}, {maxx}]]);
-        }}, 300);
-    }}
-    iniciarControl();
-    </script>
-    """
-    )
-    m.get_root().html.add_child(panel_html)
-    return m
-
-
-def generar_mapa_chirps(gdf: gpd.GeoDataFrame, nc_path: Path):
-    if gdf.crs != "EPSG:4326":
-        gdf = gdf.to_crs(epsg=4326)
-
-    ds = xr.open_dataset(nc_path)
-    da_p = ds["precipitation"]
+def cargar_chirps(nc_path: Path):
+    with xr.open_dataset(nc_path) as ds:
+        da_p = ds["precipitation"].load()
     lat_col = "lat" if "lat" in da_p.coords else "latitude"
     lon_col = "lon" if "lon" in da_p.coords else "longitude"
-
     lats = da_p[lat_col].values
     lons = da_p[lon_col].values
-    time_vals = pd.to_datetime(da_p.time.values)
     pad = (
         abs(float(lats[1] - lats[0])) / 2.0
         if len(lats) > 1
         else abs(float(lons[1] - lons[0])) / 2.0
     )
+    return da_p, lats, lons, pad
 
-    minx, miny, maxx, maxy = [float(v) for v in gdf.total_bounds]
-    centro_lat = (miny + maxy) / 2
-    centro_lon = (minx + maxx) / 2
 
-    m = folium.Map(
-        location=[centro_lat, centro_lon],
-        zoom_start=12,
-        tiles="OpenStreetMap",
-        width="100%",
-        height="780px",
+# =========================================================================
+# Estadísticas zonales (promedio de píxeles que intersectan cada barrio)
+# =========================================================================
+def preparar_barrios(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    gdf_b = gdf.copy()
+    col_nombre = next((c for c in gdf_b.columns if c.lower() == "nombre"), gdf_b.columns[0])
+    gdf_b["b_id"] = np.arange(len(gdf_b))
+    gdf_b["nombre_barrio"] = gdf_b[col_nombre].astype(str)
+    return gdf_b
+
+
+def _pixeles_por_barrio(gdf_b, lats, lons, pad):
+    """Índices planos (i * n_lon + j) de los píxeles que intersectan cada barrio (STRtree)."""
+    ii, jj = np.divmod(np.arange(len(lats) * len(lons)), len(lons))
+    cajas = shapely.box(lons[jj] - pad, lats[ii] - pad, lons[jj] + pad, lats[ii] + pad)
+    barrio_idx, pixel_idx = shapely.STRtree(cajas).query(
+        gdf_b.geometry.values, predicate="intersects"
     )
-    m.fit_bounds([[miny, minx], [maxy, maxx]])
+    orden = np.argsort(barrio_idx, kind="stable")
+    cortes = np.cumsum(np.bincount(barrio_idx, minlength=len(gdf_b)))[:-1]
+    return np.split(pixel_idx[orden], cortes)
 
-    pixel_boxes = [
-        {
-            "i": i,
-            "j": j,
-            "geom": box(lon - pad, lat - pad, lon + pad, lat + pad),
-        }
-        for i, lat in enumerate(lats)
-        for j, lon in enumerate(lons)
+
+def _series_zonales(arr: np.ndarray, por_barrio, decimales: int):
+    plano = arr.reshape(arr.shape[0], -1)
+    series = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # barrios sin píxeles válidos
+        for idx in por_barrio:
+            medias = np.nanmean(plano[:, idx], axis=1) if len(idx) else np.full(arr.shape[0], np.nan)
+            series.append([None if np.isnan(v) else round(float(v), decimales) for v in medias])
+    return series
+
+
+def estadisticas_zonales(gdf: gpd.GeoDataFrame, arrays: dict, lats, lons, pad, decimales: int = 1):
+    """Devuelve (gdf preparado con n_pixeles, lista de dicts por barrio con una serie por variable)."""
+    gdf_b = preparar_barrios(gdf)
+    por_barrio = _pixeles_por_barrio(gdf_b, lats, lons, pad)
+    series = {k: _series_zonales(np.asarray(a, dtype=float), por_barrio, decimales) for k, a in arrays.items()}
+    stats = [
+        {"id": int(k), "nom": nom, "n_pix": int(len(por_barrio[k])), **{v: series[v][k] for v in arrays}}
+        for k, nom in enumerate(gdf_b["nombre_barrio"])
     ]
-    col_nombre = next((c for c in gdf.columns if c.lower() == "nombre"), gdf.columns[0])
-    gdf["b_id"] = list(range(len(gdf)))
-    gdf["nombre_barrio"] = gdf[col_nombre].astype(str)
+    gdf_b["n_pixeles"] = [s["n_pix"] for s in stats]
+    return gdf_b, stats
 
-    barrios_stats = []
-    for idx, row in gdf.iterrows():
-        b_geom = row.geometry
-        touching = [p for p in pixel_boxes if b_geom.intersects(p["geom"])]
-        p_prom = []
-        for ti in range(len(time_vals)):
-            vals = [float(da_p.isel(time=ti).values[p["i"], p["j"]]) for p in touching]
-            vals = [v for v in vals if not np.isnan(v)]
-            p_prom.append(round(float(np.mean(vals)), 2) if vals else None)
-        barrios_stats.append(
-            {
-                "id": int(idx),
-                "nom": str(row["nombre_barrio"]),
-                "n_pix": int(len(touching)),
-                "p": p_prom,
-            }
-        )
-    gdf["n_pixeles"] = [b["n_pix"] for b in barrios_stats]
 
-    vals_clean = da_p.values[~np.isnan(da_p.values)]
-    vmin_p = 0.0
-    vmax_p = (
-        max(1.0, round(float(np.max(vals_clean)), 1)) if len(vals_clean) else 10.0
+def calcular_estadisticas_zonales(gdf, da_rh, da_t, lat_col, lon_col, pad):
+    lats = da_rh[lat_col].values
+    lons = da_rh[lon_col].values
+    time_vals = pd.to_datetime(da_rh.time.values)
+    gdf_b, stats = estadisticas_zonales(gdf, {"rh": da_rh.values, "t": da_t.values}, lats, lons, pad)
+    return gdf_b, stats, time_vals, lats, lons
+
+
+# =========================================================================
+# Construcción de mapas
+# =========================================================================
+MAP_CSS = f"""
+<link href="{FONT_URL}" rel="stylesheet">
+<style>
+  html, body, .leaflet-container {{ font-family: {FONT_STACK}; background: {COLORS["page"]}; }}
+  .leaflet-container {{ border-radius: 12px; }}
+  .leaflet-control-attribution {{ font-size: 10px; background: rgba(252,252,251,.8) !important; }}
+  .leaflet-bar, .leaflet-control-layers {{
+      border: 1px solid {COLORS["grid"]} !important; border-radius: 8px !important;
+      box-shadow: 0 2px 8px rgba(11,11,11,.06) !important;
+  }}
+  .leaflet-bar a {{ color: {COLORS["ink_2"]} !important; }}
+  .leaflet-control-layers-expanded {{ padding: 8px 10px; font-size: 12px; color: {COLORS["ink_2"]}; }}
+  .leaflet-bar-timecontrol {{ background: {COLORS["surface"]}; }}
+  .leaflet-bar-timecontrol .timecontrol-date {{ font: 600 12px {FONT_STACK}; color: {COLORS["ink"]}; }}
+
+  .gc-panel {{
+      position: absolute; top: 12px; left: 56px; z-index: 1000; width: 248px;
+      background: {COLORS["surface"]}; color: {COLORS["ink"]};
+      border: 1px solid {COLORS["grid"]}; border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(11,11,11,.08); padding: 14px 14px 12px; font-size: 12.5px;
+  }}
+  .gc-panel-title {{ font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+      color: {COLORS["muted"]}; margin-bottom: 8px; }}
+  .gc-seg {{ display: flex; background: {COLORS["surface_alt"]}; border-radius: 8px; padding: 3px; gap: 2px; margin-bottom: 12px; }}
+  .gc-seg label {{ flex: 1; text-align: center; cursor: pointer; padding: 5px 4px; border-radius: 6px;
+      font-size: 11.5px; font-weight: 500; color: {COLORS["ink_2"]}; transition: all .15s ease; }}
+  .gc-seg input {{ display: none; }}
+  .gc-seg label:has(input:checked) {{ background: {COLORS["surface"]}; color: {COLORS["ink"]};
+      box-shadow: 0 1px 3px rgba(11,11,11,.12); }}
+  .gc-legend {{ margin-bottom: 10px; }}
+  .gc-legend-title {{ font-size: 12px; font-weight: 600; color: {COLORS["ink"]}; margin-bottom: 5px; }}
+  .gc-legend-title span {{ font-weight: 400; color: {COLORS["muted"]}; }}
+  .gc-legend-bar {{ height: 10px; border-radius: 3px; }}
+  .gc-legend-ticks {{ display: flex; justify-content: space-between; font-size: 10.5px; color: {COLORS["ink_2"]};
+      margin-top: 3px; font-variant-numeric: tabular-nums; }}
+  .gc-legend-note {{ font-size: 10px; color: {COLORS["muted"]}; margin-top: 2px; }}
+  .gc-readout {{ border-top: 1px solid {COLORS["grid"]}; padding-top: 9px; margin-top: 2px; }}
+  .gc-readout-row {{ display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 2px 0; }}
+  .gc-readout-row span:first-child {{ color: {COLORS["muted"]}; font-size: 11.5px; }}
+  .gc-readout-row span:last-child {{ font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }}
+  .gc-readout-big {{ font-size: 18px; font-weight: 700; letter-spacing: -.01em; }}
+  .gc-tooltip {{ font-family: {FONT_STACK}; font-size: 12px; border-radius: 8px !important;
+      border: 1px solid {COLORS["grid"]} !important; box-shadow: 0 4px 14px rgba(11,11,11,.08) !important; }}
+</style>
+"""
+
+
+class _ScriptMapa(MacroElement):
+    """JS que se ejecuta después de crear el mapa y sus capas (sin polling)."""
+
+    _template = Template("{% macro script(this, kwargs) %}{{ this.js }}{% endmacro %}")
+
+    def __init__(self, js: str):
+        super().__init__()
+        self._name = "ScriptMapa"
+        self.js = js
+
+
+def mapa_base(gdf, height: int | str = "100%", controles: bool = True) -> folium.Map:
+    """Mapa con fondo y cámara idénticos en toda la aplicación."""
+    minx, miny, maxx, maxy = [float(v) for v in gdf.total_bounds]
+    margen = 0.35
+    m = folium.Map(
+        location=[(miny + maxy) / 2, (minx + maxx) / 2],
+        zoom_start=MAP_ZOOM,
+        zoom_snap=0.25,
+        zoom_delta=0.5,
+        min_zoom=10,
+        max_zoom=19,  # edificios visibles desde z16
+        max_bounds=True,
+        min_lat=miny - margen,
+        max_lat=maxy + margen,
+        min_lon=minx - margen,
+        max_lon=maxx + margen,
+        tiles=None,
+        width="100%",
+        height=height,
+        control_scale=controles,
+        zoom_control=controles,
     )
-    cm_p = bcm.linear.YlGnBu_09.scale(vmin_p, vmax_p)
+    folium.TileLayer(TILES_URL, attr=TILES_ATTR, name="OpenStreetMap", control=False,
+                     max_native_zoom=19, max_zoom=19).add_to(m)
+    m.get_root().header.add_child(Element(MAP_CSS))
+    return m
 
-    features_p = []
+
+def capa_barrios(gdf_b, con_pixeles: bool = True) -> folium.GeoJson:
+    campos = ["nombre_barrio", "n_pixeles"] if con_pixeles else ["nombre_barrio"]
+    alias = ["Barrio", "Píxeles"] if con_pixeles else ["Barrio"]
+    return folium.GeoJson(
+        gdf_b[["b_id"] + campos + ["geometry"]],
+        name="Límites Cali",
+        show=True,
+        style_function=lambda x: {
+            "fillColor": COLORS["ink"],
+            "fillOpacity": 0.0,
+            **BARRIO_LINE,
+        },
+        highlight_function=lambda x: {
+            "weight": 2,
+            "color": COLORS["accent_dark"],
+            "fillOpacity": 0.06,
+            "fillColor": COLORS["accent"],
+        },
+        tooltip=folium.GeoJsonTooltip(fields=campos, aliases=alias, sticky=True, class_name="gc-tooltip"),
+    )
+
+
+def _periodo(time_vals):
+    if len(time_vals) > 1:
+        dt_hours = max(1, int((time_vals[1] - time_vals[0]).total_seconds() / 3600))
+        period = f"P{dt_hours // 24}D" if dt_hours >= 24 else f"PT{dt_hours}H"
+        fmt = "YYYY-MM-DD" if dt_hours >= 24 else "YYYY-MM-DD HH:mm"
+        return period, fmt
+    return "P1D", "YYYY-MM-DD"
+
+
+def _features_pixeles(arr, lats, lons, pad, time_vals, cm, opacidad):
+    feats = []
     for t_idx, t in enumerate(time_vals):
-        iso_time = t.isoformat()
-        vals_mat = da_p.isel(time=t_idx).values
-        for i, lat_val in enumerate(lats):
-            for j, lon_val in enumerate(lons):
-                v = float(vals_mat[i, j])
-                if not np.isnan(v):
-                    coords = [
-                        [
-                            [lon_val - pad, lat_val - pad],
-                            [lon_val + pad, lat_val - pad],
-                            [lon_val + pad, lat_val + pad],
-                            [lon_val - pad, lat_val + pad],
-                            [lon_val - pad, lat_val - pad],
-                        ]
-                    ]
-                    features_p.append(
-                        {
-                            "type": "Feature",
-                            "geometry": {
-                                "type": "Polygon",
-                                "coordinates": coords,
-                            },
-                            "properties": {
-                                "times": [iso_time],
-                                "style": {
-                                    "fillColor": cm_p(v),
-                                    "fillOpacity": 0.45,
-                                    "color": "white",
-                                    "weight": 0.3,
-                                },
-                            },
-                        }
-                    )
+        iso = t.isoformat()
+        for i, lat in enumerate(lats):
+            for j, lon in enumerate(lons):
+                v = float(arr[t_idx, i, j])
+                if np.isnan(v):
+                    continue
+                feats.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [[
+                        [lon - pad, lat - pad], [lon + pad, lat - pad],
+                        [lon + pad, lat + pad], [lon - pad, lat + pad], [lon - pad, lat - pad],
+                    ]]},
+                    "properties": {
+                        "times": [iso],
+                        "style": {"fillColor": cm.rgb_hex_str(v), "fillOpacity": opacidad,
+                                  "color": COLORS["surface"], "weight": 0.8, "opacity": 0.5},
+                    },
+                })
+    return {"type": "FeatureCollection", "features": feats}
 
-    tg_p = TimestampedGeoJson(
-        {"type": "FeatureCollection", "features": features_p},
-        period="P1D",
-        duration="P1D",
+
+def _timestamped(fc, period, fmt):
+    return TimestampedGeoJson(
+        fc,
+        period=period,
+        duration=period,
         add_last_point=False,
         auto_play=False,
         loop=False,
         max_speed=5,
         loop_button=True,
-        date_options="YYYY-MM-DD",
+        date_options=fmt,
         time_slider_drag_update=True,
     )
-    tg_p.add_to(m)
 
-    folium.GeoJson(
-        gdf,
-        name="Límites Cali",
-        show=True,
-        style_function=lambda x: {
-            "fillColor": "#ffffff",
-            "fillOpacity": 0.04,
-            "color": "#111111",
-            "weight": 1.2,
-        },
-        highlight_function=lambda x: {
-            "weight": 2.5,
-            "color": "#000000",
-            "fillOpacity": 0.20,
-        },
-        tooltip=folium.GeoJsonTooltip(
-            fields=["nombre_barrio", "n_pixeles"],
-            aliases=["Barrio:", "No. Píxeles:"],
-            localize=True,
-            sticky=True,
-            style="background-color: white; border-radius: 4px; padding: 6px; font-weight: bold; border: 1px solid #444;",
-        ),
-    ).add_to(m)
 
-    folium.LayerControl(position="topright", collapsed=False).add_to(m)
+def _grilla_js(arr, dec):
+    return [[[None if np.isnan(v) else round(float(v), dec) for v in fila] for fila in paso] for paso in arr]
 
-    grid_data = {
-        "lats": [float(x) for x in lats],
-        "lons": [float(x) for x in lons],
-        "pad": float(pad),
-        "p": [
-            [
-                [
-                    None if np.isnan(v) else round(float(v), 2)
-                    for v in da_p.isel(time=ti).values[i]
-                ]
-                for i in range(len(lats))
-            ]
-            for ti in range(len(time_vals))
-        ],
-    }
 
-    panel_html = Element(
-        f"""
-    <div id="panel-control-ch" style="position: absolute; top: 14px; left: 55px; z-index: 1000; background: white; padding: 12px 16px; border-radius: 8px; box-shadow: 0 3px 10px rgba(0,0,0,0.25); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; width: 240px;">
-        <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px; border-bottom: 1px solid #eee; padding-bottom: 4px;">🌧️ CHIRPS Precipitación</div>
-        <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #444;"><span>{vmin_p} mm</span><span>{((vmin_p + vmax_p)/2):.1f} mm</span><span>{vmax_p} mm</span></div>
-        <div style="height: 12px; border-radius: 3px; background: linear-gradient(to right, #ffffd9, #c7e9b4, #41b6c4, #225ea8, #081d58); border: 1px solid #aaa; margin: 3px 0;"></div>
-        <div style="text-align: center; font-size: 10px; color: #666;">Precipitación diaria (mm/día)</div>
-        <div id="box-valor" style="margin-top: 8px; padding: 5px 8px; background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 4px;">
-            <div style="font-size: 10px; color: #6c757d; text-transform: uppercase;">Pixel bajo el cursor:</div>
-            <div id="txt-valor" style="font-size: 15px; font-weight: bold; color: #0d6efd;">--</div>
-        </div>
-        <div id="box-barrio" style="margin-top: 8px; padding: 6px 8px; background: #eef4fc; border: 1px solid #d5e4f7; border-radius: 4px; font-size: 11px;">
-            <div style="font-weight: bold; color: #1e4273; border-bottom: 1px solid #c8dcf5; padding-bottom: 2px; margin-bottom: 3px;">📍 Barrio Seleccionado:</div>
-            <div><b>Nombre:</b> <span id="b-nom">--</span></div>
-            <div><b>No. Píxeles:</b> <span id="b-pix">--</span></div>
-            <div><b>Promedio Zonal:</b> <span id="b-val" style="font-weight: bold; color: #0055bb;">--</span></div>
-        </div>
-    </div>
-    <script>
-    var grid_info_ch = {json.dumps(grid_data)};
-    var barrios_info_ch = {json.dumps(barrios_stats)};
-    var map_id_ch = "{m.get_name()}";
-    var barrioActivo_ch = null;
-    var ultimoLatLng_ch = null;
-    var b_coords = [[{miny}, {minx}], [{maxy}, {maxx}]];
+# JS común: lectura del píxel bajo el cursor y del promedio zonal del barrio
+_JS_LECTURA = """
+var GC = window.GC;
+GC.tIdx = function() {
+    var td = GC.map.timeDimension;
+    return td ? Math.max(0, td.getCurrentTimeIndex()) : 0;
+};
+GC.fmt = function(v, u) { return (v !== null && v !== undefined) ? v.toLocaleString('es-CO') + ' ' + u : '—'; };
+GC.pixel = function(ll) {
+    var g = GC.grid, el = document.getElementById('gc-pix');
+    if (!el) return;
+    if (GC.var === 'none') { el.innerText = '—'; return; }
+    var i = g.lats.findIndex(function(v) { return Math.abs(ll.lat - v) <= g.pad; });
+    var j = g.lons.findIndex(function(v) { return Math.abs(ll.lng - v) <= g.pad; });
+    el.innerText = (i < 0 || j < 0) ? '—' : GC.fmt(g[GC.var][GC.tIdx()][i][j], GC.units[GC.var]);
+};
+GC.barrio = function(idx) {
+    GC.activo = idx;
+    var b = GC.barrios[idx];
+    if (!b) return;
+    document.getElementById('gc-bnom').innerText = b.nom;
+    document.getElementById('gc-bpix').innerText = b.n_pix;
+    document.getElementById('gc-bval').innerText =
+        GC.var === 'none' ? '—' : GC.fmt(b[GC.var][GC.tIdx()], GC.units[GC.var]);
+};
+GC.limpiar = function() {
+    GC.activo = null;
+    ['gc-bnom', 'gc-bpix', 'gc-bval'].forEach(function(id) { document.getElementById(id).innerText = '—'; });
+};
+GC.capaBarrios.eachLayer(function(l) {
+    l.on('mouseover', function() { GC.barrio(l.feature.properties.b_id); });
+    l.on('mouseout', GC.limpiar);
+});
+GC.map.on('mousemove', function(e) { GC.ultimo = e.latlng; GC.pixel(e.latlng); });
+if (GC.map.timeDimension) {
+    GC.map.timeDimension.on('timeload timechange', function() {
+        if (GC.activo !== null) GC.barrio(GC.activo);
+        if (GC.ultimo) GC.pixel(GC.ultimo);
+    });
+}
+"""
 
-    function actPixelCh(ll) {{
-        var g = grid_info_ch;
-        var i_lat = g.lats.findIndex(function(lt){{ return Math.abs(ll.lat - lt) <= g.pad; }});
-        var j_lon = g.lons.findIndex(function(ln){{ return Math.abs(ll.lng - ln) <= g.pad; }});
-        var el = document.getElementById('txt-valor');
-        var map = window[map_id_ch];
-        if (el && i_lat !== -1 && j_lon !== -1) {{
-            var ti = map && map.timeDimension ? Math.max(0, map.timeDimension.getCurrentTimeIndex()) : 0;
-            var v = g.p[ti][i_lat][j_lon];
-            el.innerText = (v !== null && v !== undefined) ? v + ' mm' : '--';
-        }} else if (el) {{
-            el.innerText = '--';
-        }}
-    }}
+_HTML_LECTURA = """
+<div class="gc-readout">
+    <div class="gc-readout-row"><span>Píxel bajo el cursor</span><span id="gc-pix" class="gc-readout-big">—</span></div>
+    <div class="gc-readout-row"><span>Barrio</span><span id="gc-bnom">—</span></div>
+    <div class="gc-readout-row"><span>Píxeles intersectados</span><span id="gc-bpix">—</span></div>
+    <div class="gc-readout-row"><span>Promedio zonal</span><span id="gc-bval">—</span></div>
+</div>
+"""
 
-    function actBarrioCh(idx) {{
-        barrioActivo_ch = idx;
-        var b = barrios_info_ch[idx];
-        if (!b) return;
-        document.getElementById('b-nom').innerText = b.nom;
-        document.getElementById('b-pix').innerText = b.n_pix;
-        var map = window[map_id_ch];
-        var ti = map && map.timeDimension ? Math.max(0, map.timeDimension.getCurrentTimeIndex()) : 0;
-        var v = b.p[ti];
-        document.getElementById('b-val').innerText = (v !== null && v !== undefined) ? v + ' mm' : '--';
-    }}
 
-    function initChirps() {{
-        var map = window[map_id_ch];
-        var el = document.getElementById(map_id_ch);
-        if (!map || !el) return setTimeout(initChirps, 100);
-        map.invalidateSize();
-        map.fitBounds(b_coords);
-        L.geoJson({gdf[["b_id", "geometry"]].to_json()}, {{
-            style: {{ fillColor: '#fff', fillOpacity: 0.01, color: 'transparent' }},
-            onEachFeature: function(f, l) {{
-                l.on('mouseover', function() {{ actBarrioCh(f.properties.b_id); }});
-                l.on('mouseout', function() {{
-                    barrioActivo_ch = null;
-                    document.getElementById('b-nom').innerText = '--';
-                    document.getElementById('b-pix').innerText = '--';
-                    document.getElementById('b-val').innerText = '--';
-                }});
-            }}
-        }}).addTo(map);
-        if (map.timeDimension) {{
-            map.timeDimension.on('timeload timechange', function() {{
-                if (barrioActivo_ch !== null) actBarrioCh(barrioActivo_ch);
-                if (ultimoLatLng_ch) actPixelCh(ultimoLatLng_ch);
-            }});
-        }}
-        el.addEventListener('mousemove', function(e) {{
-            ultimoLatLng_ch = map.mouseEventToLatLng(e);
-            actPixelCh(ultimoLatLng_ch);
-        }});
-        [200, 600, 1200].forEach(function(d){{
-            setTimeout(function(){{ map.invalidateSize(); map.fitBounds(b_coords); }}, d);
-        }});
-    }}
-    initChirps();
-    </script>
-    """
+def _datos_js(m, capa, grid, barrios, units, var_inicial):
+    return (
+        "window.GC = {"
+        f"map: {m.get_name()}, capaBarrios: {capa.get_name()},"
+        f"grid: {json.dumps(grid)}, barrios: {json.dumps(barrios)}, units: {json.dumps(units)},"
+        f"var: '{var_inicial}', activo: null, ultimo: null"
+        "};\n"
     )
-    m.get_root().html.add_child(panel_html)
+
+
+def generar_mapa_interactivo(gdf_b, da_rh, da_t, barrios_stats, time_vals, lats, lons, pad):
+    m = mapa_base(gdf_b)
+    spec_rh, spec_t = RASTER_VARS["rh"], RASTER_VARS["t"]
+    arr_rh, arr_t = np.asarray(da_rh.values, float), np.asarray(da_t.values, float)
+
+    cm_rh = colormap(spec_rh.cmap, *escala_robusta(arr_rh))
+    cm_t = colormap(spec_t.cmap, *escala_robusta(arr_t))
+    period, fmt = _periodo(time_vals)
+
+    fc_rh = _features_pixeles(arr_rh, lats, lons, pad, time_vals, cm_rh, RASTER_OPACITY)
+    fc_t = _features_pixeles(arr_t, lats, lons, pad, time_vals, cm_t, RASTER_OPACITY)
+    tg_rh = _timestamped(fc_rh, period, fmt)
+    tg_rh.add_to(m)
+    capa = capa_barrios(gdf_b).add_to(m)
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    grid = {"lats": [float(x) for x in lats], "lons": [float(x) for x in lons], "pad": float(pad),
+            "rh": _grilla_js(arr_rh, 1), "t": _grilla_js(arr_t, 1)}
+
+    m.get_root().html.add_child(Element(f"""
+    <div class="gc-panel">
+        <div class="gc-panel-title">C3S · AgERA5</div>
+        <div class="gc-seg">
+            <label><input type="radio" name="gc-var" value="rh" checked onchange="GC.cambiar('rh')">Humedad</label>
+            <label><input type="radio" name="gc-var" value="t" onchange="GC.cambiar('t')">Temp. máx.</label>
+            <label><input type="radio" name="gc-var" value="none" onchange="GC.cambiar('none')">Ocultar</label>
+        </div>
+        <div id="gc-leg-rh">{leyenda_html(cm_rh, spec_rh, opacidad=RASTER_OPACITY)}</div>
+        <div id="gc-leg-t" style="display:none">{leyenda_html(cm_t, spec_t, opacidad=RASTER_OPACITY)}</div>
+        {_HTML_LECTURA}
+    </div>
+    """))
+
+    js = _datos_js(m, capa, grid, barrios_stats, {"rh": spec_rh.unidad, "t": spec_t.unidad}, "rh")
+    js += f"""
+    window.GC.capas = {{
+        rh: {tg_rh.get_name()},
+        t: L.timeDimension.layer.geoJson(
+            L.geoJson({json.dumps(fc_t)}, {{ style: function(f) {{ return f.properties.style; }} }}),
+            {{ updateTimeDimension: false, duration: "{period}", period: "{period}" }}
+        )
+    }};
+    window.GC.cambiar = function(tipo) {{
+        var GC = window.GC;
+        GC.var = tipo;
+        ['rh', 't'].forEach(function(k) {{
+            document.getElementById('gc-leg-' + k).style.display = (k === tipo) ? 'block' : 'none';
+            if (k === tipo) {{ GC.map.addLayer(GC.capas[k]); }} else {{ GC.map.removeLayer(GC.capas[k]); }}
+        }});
+        // Los límites de barrio deben quedar encima del raster para recibir el hover
+        if (GC.map.hasLayer(GC.capaBarrios)) GC.capaBarrios.bringToFront();
+        if (GC.ultimo) GC.pixel(GC.ultimo);
+        if (GC.activo !== null) GC.barrio(GC.activo);
+    }};
+    """
+    js += _JS_LECTURA
+    _ScriptMapa(js).add_to(m)
     return m
 
 
-@st.cache_data(show_spinner=True)
+def generar_mapa_chirps(gdf_b, da_p, lats, lons, pad, barrios_stats, time_vals):
+    m = mapa_base(gdf_b)
+    spec = RASTER_VARS["p"]
+    arr = np.asarray(da_p.values, float)
+    cm_p = colormap(spec.cmap, *escala_robusta(arr, desde_cero=True))
+
+    fc = _features_pixeles(arr, lats, lons, pad, time_vals, cm_p, RASTER_OPACITY)
+    _timestamped(fc, "P1D", "YYYY-MM-DD").add_to(m)
+    capa = capa_barrios(gdf_b).add_to(m)
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+
+    grid = {"lats": [float(x) for x in lats], "lons": [float(x) for x in lons], "pad": float(pad),
+            "p": _grilla_js(arr, 2)}
+
+    m.get_root().html.add_child(Element(f"""
+    <div class="gc-panel">
+        <div class="gc-panel-title">CHIRPS v3.0</div>
+        {leyenda_html(cm_p, spec, "Precipitación diaria", opacidad=RASTER_OPACITY)}
+        {_HTML_LECTURA}
+    </div>
+    """))
+    js = _datos_js(m, capa, grid, barrios_stats, {"p": spec.unidad}, "p") + _JS_LECTURA
+    _ScriptMapa(js).add_to(m)
+    return m
+
+
+# =========================================================================
+# Estaciones in situ
+# =========================================================================
+@st.cache_data(show_spinner="Procesando registros de estaciones…")
 def cargar_y_procesar_estaciones(csv_path: Path):
     cols = [
         "Estacion",
@@ -713,11 +507,18 @@ def cargar_y_procesar_estaciones(csv_path: Path):
         "Longitud": "first",
     }
 
+    # Semana epidemiológica INS Colombia / CDC (MMWR): domingo a sábado.
+    # "W-SAT" agrupa (sábado anterior, sábado] = domingo..sábado y etiqueta con el sábado de cierre.
     df_semanal = (
-        df.groupby(["Estacion", pd.Grouper(key="Fecha", freq="W-MON")])
+        df.groupby(["Estacion", pd.Grouper(key="Fecha", freq="W-SAT")])
         .agg(reglas)
         .reset_index()
     )
+    # Año y número de semana epidemiológica: la semana 1 es la primera con >= 4 días en enero,
+    # es decir, la que contiene el primer miércoles del año.
+    miercoles = df_semanal["Fecha"] - pd.Timedelta(days=3)
+    df_semanal["Año epi"] = miercoles.dt.year
+    df_semanal["Semana epi"] = (miercoles.dt.dayofyear - 1) // 7 + 1
 
     estaciones_info = (
         df[["Estacion", "Latitud", "Longitud"]].drop_duplicates("Estacion").dropna()
