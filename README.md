@@ -86,7 +86,13 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` se genera desde `uv.lock`; no lo edites a mano (ver [Desarrollo](#8-desarrollo)).
+Para usar además los scripts de descarga (GEE y MSWEP) con pip:
+
+```bash
+pip install -r requirements-descarga.txt
+```
+
+`requirements.txt` (solo la app) y `requirements-descarga.txt` (app + descargas) se generan desde `uv.lock`; no los edites a mano (ver [Desarrollo](#8-desarrollo)).
 
 ---
 
@@ -243,7 +249,8 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 ├── outputs/                # Productos generados fuera de la app
 ├── pyproject.toml          # Dependencias del proyecto
 ├── uv.lock                 # Versiones exactas (no editar a mano)
-├── requirements.txt        # Exportado de uv.lock para instalaciones con pip
+├── requirements.txt        # Exportado de uv.lock para instalar la app con pip
+├── requirements-descarga.txt  # Igual, más las dependencias de descargas/
 └── .python-version         # Versión de Python del proyecto (3.12)
 ```
 
@@ -303,8 +310,9 @@ uv add nombre-paquete
 # Actualizar todas las dependencias dentro de los rangos permitidos
 uv lock --upgrade && uv sync
 
-# Regenerar requirements.txt tras cambiar dependencias
+# Regenerar los requirements tras cambiar dependencias
 uv export --no-hashes --no-dev --no-emit-project -o requirements.txt
+uv export --no-hashes --no-dev --group descarga --no-emit-project -o requirements-descarga.txt
 
 # Linter
 uv run ruff check app.py utils.py components views descargas
