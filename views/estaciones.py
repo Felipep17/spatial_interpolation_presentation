@@ -8,7 +8,7 @@ from streamlit_folium import st_folium
 
 from components.charts import mostrar, serie_temporal
 from components.theme import COLORS, VARIABLES, colormap, escala_robusta, leyenda_html
-from components.ui import empty_state, metric_card, render_header, section_title, tabla_resumen
+from components.ui import boton_descarga, empty_state, metric_card, render_header, section_title, tabla_resumen
 from utils import capa_barrios, cargar_y_procesar_estaciones, grilla_1km_estaciones, mapa_base, preparar_barrios
 
 ETIQUETAS_CORTAS = {
@@ -106,6 +106,7 @@ def _resumen_grilla(celdas, r: dict):
                 "n_barrios": "Barrios", "pct_cali": st.column_config.NumberColumn("% en Cali", format="%d %%"),
             },
         )
+        boton_descarga(celdas, "grilla_1km_celdas_cali", key="dl_grilla")
 
 
 def render(gdf, inputs_path: Path):
@@ -179,8 +180,8 @@ def render(gdf, inputs_path: Path):
     with k1:
         metric_card(
             "Última semana registrada", spec.fmt(serie.iloc[-1]),
-            delta=round(float(serie.iloc[-1] - media), spec.decimales), delta_description="vs. media histórica",
-            delta_color="off", chart=serie.iloc[-26:].round(2).tolist(), chart_type=tipo_chart,
+            delta=f"{float(serie.iloc[-1] - media):+.{spec.decimales}f} {spec.unidad}".strip(),
+            delta_description="vs. media histórica", delta_color="off", neutral_delta=True, chart=serie.iloc[-26:].round(2).tolist(), chart_type=tipo_chart,
             help=f"Semana que cierra el {serie.index[-1]:%d/%m/%Y}. Micro-gráfico: últimas 26 semanas.",
         )
     with k2:
@@ -300,6 +301,7 @@ def render(gdf, inputs_path: Path):
             ),
         },
     )
+    boton_descarga(tabla, f"red_estaciones_{variable_sel.lower().replace(' ', '_')}", key="dl_red")
     filas = evento.selection.rows if evento else []
     if filas:
         elegido = tabla.iloc[filas[0]]["Estación"]

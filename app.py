@@ -4,7 +4,7 @@ import streamlit as st
 
 from components.ui import apply_custom_css, badge_html, render_footer, sidebar_label
 from utils import cargar_shapefile, listar_fuentes
-from views import estaciones, satelital
+from views import barrio, estaciones, panorama, satelital
 
 st.set_page_config(
     page_title="GeoClima Cali",
@@ -40,6 +40,14 @@ except Exception as e:  # lectura/reproyección
 # =========================================================================
 # Navegación nativa: solo se ejecuta la página activa
 # =========================================================================
+def _pagina_panorama():
+    panorama.render(gdf, INPUTS_PATH, paginas={
+        "Explorar fuentes": (pag_satelital, ":material/satellite_alt:"),
+        "Estaciones": (pag_estaciones, ":material/sensors:"),
+        "Perfil de barrio": (pag_barrio, ":material/location_city:"),
+    })
+
+
 def _pagina_satelital():
     satelital.render(gdf, INPUTS_PATH)
 
@@ -48,13 +56,20 @@ def _pagina_estaciones():
     estaciones.render(gdf, INPUTS_PATH)
 
 
+def _pagina_barrio():
+    barrio.render(gdf, INPUTS_PATH)
+
+
+# La página por defecto siempre se sirve en "/"
+pag_panorama = st.Page(_pagina_panorama, title="Panorama", icon=":material/dashboard:", default=True)
+pag_satelital = st.Page(_pagina_satelital, title="Fuentes satelitales", icon=":material/satellite_alt:",
+                        url_path="satelital")
+pag_estaciones = st.Page(_pagina_estaciones, title="Estaciones in situ", icon=":material/sensors:",
+                         url_path="estaciones")
+pag_barrio = st.Page(_pagina_barrio, title="Perfil de barrio", icon=":material/location_city:", url_path="barrio")
 paginas = {
-    "Módulos": [
-        # La página por defecto siempre se sirve en "/"
-        st.Page(_pagina_satelital, title="Fuentes satelitales", icon=":material/satellite_alt:", default=True),
-        st.Page(_pagina_estaciones, title="Estaciones in situ", icon=":material/sensors:",
-                url_path="estaciones"),
-    ]
+    "Resumen": [pag_panorama],
+    "Módulos": [pag_satelital, pag_estaciones, pag_barrio],
 }
 
 st.logo(ASSETS_PATH / "logo.svg", icon_image=ASSETS_PATH / "icon.svg", size="large")

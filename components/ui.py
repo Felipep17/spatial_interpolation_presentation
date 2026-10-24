@@ -99,6 +99,25 @@ def apply_custom_css():
         font-weight: 600; color: {c["ink"]}; text-align: right; font-variant-numeric: tabular-nums;
     }}
 
+    /* Tarjetas de fuentes (Panorama) */
+    .gc-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }}
+    .gc-card {{
+        background: {c["surface"]}; border: 1px solid {c["grid"]}; border-radius: 12px; padding: 14px 16px;
+        box-shadow: 0 1px 2px rgba(11,11,11,0.04); transition: box-shadow .18s ease, transform .18s ease;
+        display: flex; flex-direction: column; gap: 8px;
+    }}
+    .gc-card:hover {{ box-shadow: 0 6px 18px rgba(11,11,11,0.07); transform: translateY(-1px); }}
+    .gc-card-top {{ display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }}
+    .gc-card-name {{ font-weight: 600; font-size: 15px; color: {c["ink"]}; }}
+    .gc-card-vars {{ font-size: 12px; color: {c["muted"]}; margin-top: -4px; }}
+    .gc-card .gc-readout-row {{ display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 2px 0; }}
+    .gc-card .gc-readout-row span:first-child {{ color: {c["ink_2"]}; }}
+    .gc-card .gc-readout-row span:last-child {{ font-weight: 600; color: {c["ink"]}; font-variant-numeric: tabular-nums; text-align: right; }}
+    .gc-meter-label {{ display: flex; justify-content: space-between; font-size: 11.5px; color: {c["ink_2"]}; margin-top: 4px; }}
+    .gc-meter-label b {{ color: {c["ink"]}; font-weight: 600; }}
+    .gc-meter {{ height: 6px; border-radius: 3px; background: #cde2fb; overflow: hidden; }}
+    .gc-meter > div {{ height: 100%; background: {c["accent"]}; border-radius: 3px; }}
+
     /* Estado vacío */
     .gc-empty {{
         border: 1px dashed {c["axis"]}; border-radius: 12px; padding: 36px 24px;
@@ -163,7 +182,12 @@ def apply_custom_css():
         }}
         [data-testid="stMetric"] {{ padding: 10px 12px !important; }}
         [data-testid="stMetricValue"] {{ font-size: 1.25rem !important; }}
-        [data-testid="stMetricLabel"] p {{ font-size: 11px !important; }}
+        [data-testid="stMetricLabel"] p {{ font-size: 11px !important; white-space: normal !important; }}
+        [data-testid="stMetricLabel"] *, [data-testid="stMetricDelta"] * {{
+            white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
+        }}
+        /* La barra de herramientas de Plotly tapa la leyenda en pantallas táctiles */
+        .modebar-container {{ display: none !important; }}
 
         /* Selectores segmentados (fuentes, variables): pasan a varias líneas */
         [data-testid="stButtonGroup"], [data-testid="stButtonGroup"] > div {{
@@ -247,6 +271,44 @@ def tabla_resumen(filas: list[tuple[str, str]]):
         f'<div class="gc-readout-row"><span>{escape(k)}</span><span>{escape(v)}</span></div>' for k, v in filas
     )
     st.html(f'<div class="gc-grid-summary">{filas_html}</div>')
+
+
+def boton_descarga(df, nombre: str, key: str):
+    """Descarga CSV de una tabla (sin columnas de mini-gráficos). UTF-8 con BOM para Excel."""
+    columnas = [c for c in df.columns
+                if c != "geometry" and not df[c].map(lambda v: isinstance(v, (list, tuple))).any()]
+    st.download_button(
+        "Descargar CSV",
+        df[columnas].to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"{nombre}.csv",
+        mime="text/csv",
+        icon=":material/download:",
+        type="tertiary",
+        key=key,
+    )
+
+
+def tarjetas_fuentes(tarjetas: list[dict]):
+    """Rejilla de tarjetas resumen. Cada tarjeta: nombre, etiqueta, variables, filas [(k, v)], medidor (0-100)."""
+    html = []
+    for t in tarjetas:
+        filas = "".join(
+            f'<div class="gc-readout-row"><span>{escape(k)}</span><span>{escape(v)}</span></div>' for k, v in t["filas"]
+        )
+        medidor = ""
+        if t.get("medidor") is not None:
+            pct = max(0.0, min(100.0, float(t["medidor"])))
+            medidor = (
+                f'<div class="gc-meter-label"><span>{escape(t.get("medidor_label", ""))}</span><b>{pct:.0f} %</b></div>'
+                f'<div class="gc-meter" role="meter" aria-valuenow="{pct:.0f}" aria-valuemin="0" aria-valuemax="100">'
+                f'<div style="width:{pct:.1f}%"></div></div>'
+            )
+        etiqueta = badge_html(t["etiqueta"], t.get("tono", "blue")) if t.get("etiqueta") else ""
+        html.append(
+            f'<div class="gc-card"><div class="gc-card-top"><span class="gc-card-name">{escape(t["nombre"])}</span>'
+            f'{etiqueta}</div><div class="gc-card-vars">{escape(t.get("variables", ""))}</div>{filas}{medidor}</div>'
+        )
+    st.html(f'<div class="gc-cards">{"".join(html)}</div>')
 
 
 def empty_state(title: str, body: str):

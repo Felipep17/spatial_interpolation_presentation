@@ -6,6 +6,8 @@ Integra tres fuentes de información sobre la capa de barrios de la ciudad:
 
 | Módulo | Fuente | Qué muestra |
 |---|---|---|
+| **Panorama** (inicio) | Todas | Indicadores generales, tarjetas por fuente, cuánto distingue cada fuente entre barrios y comparación CHIRPS–MSWEP |
+| **Perfil de barrio** | Todas | Buscador de barrios: mapa con sus celdas de 1 km, indicadores frente al promedio de Cali, series diarias y estaciones cercanas (enlace compartible `?barrio=`) |
 | **Fuentes satelitales** | Copernicus C3S · AgERA5 (0.1°) | Humedad relativa y temperatura máxima diarias, visor temporal y estadísticas zonales por barrio |
 | | CHIRPS v3.0 (0.05°) | Precipitación diaria, visor temporal y acumulados por barrio |
 | | MSWEP (0.1°) | Precipitación diaria multi-fuente, mismo visor que CHIRPS |
@@ -106,8 +108,12 @@ Abre **http://localhost:8501** en el navegador.
 
 | Página | URL |
 |---|---|
-| Fuentes satelitales (por defecto) | `http://localhost:8501/` |
+| Panorama (por defecto) | `http://localhost:8501/` |
+| Fuentes satelitales | `http://localhost:8501/satelital` |
 | Estaciones in situ | `http://localhost:8501/estaciones` |
+| Perfil de barrio | `http://localhost:8501/barrio?barrio=Nueva%20Floresta` |
+
+Todas las tablas por barrio y por estación tienen un botón **Descargar CSV** (UTF-8, compatible con Excel). La interfaz se adapta a móviles (≤ 640 px) sin cambiar la versión de escritorio.
 
 Opciones útiles:
 
@@ -235,10 +241,13 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 .
 ├── app.py                  # Punto de entrada: configuración, barra lateral y navegación
 ├── utils.py                # Carga de datos, estadísticas zonales y construcción de mapas
+├── datos.py                # Procesamiento cacheado de cada fuente, compartido por las páginas
 ├── descargas/              # Scripts de descarga: GEE (NDVI/NDWI 1 km) y MSWEP; grilla de 1 km común
 ├── views/
-│   ├── satelital.py        # Módulo 01 · Fuentes satelitales (C3S, CHIRPS, inventario)
-│   └── estaciones.py       # Módulo 02 · Estaciones in situ
+│   ├── panorama.py         # Inicio · resumen de todas las fuentes
+│   ├── satelital.py        # Módulo 01 · Fuentes satelitales (AgERA5, CHIRPS, MSWEP, GEE)
+│   ├── estaciones.py       # Módulo 02 · Estaciones in situ y grilla de 1 km
+│   └── barrio.py           # Módulo 03 · Perfil de barrio
 ├── components/
 │   ├── theme.py            # Tokens de diseño: colores, variables, paletas, leyendas, plantilla Plotly
 │   ├── ui.py               # Componentes de interfaz: encabezados, KPIs, insignias, footer
@@ -339,7 +348,7 @@ uv add --dev watchdog
 | "Archivos incompletos" en C3S | Los nombres no contienen `relative_humidity` / `temperature_maximu` | Renombra los archivos o ajusta la búsqueda en `views/satelital.py` |
 | `Port 8501 is already in use` | Ya hay otra app corriendo | Ciérrala o usa `--server.port 8600` |
 | Datos viejos tras reemplazar un archivo | Caché del navegador o de Streamlit | Menú ⋮ → **Clear cache** y recarga, o reinicia el servidor |
-| "Page not found" al abrir `/satelital` | La página por defecto se sirve en `/` | Usa `http://localhost:8501/` |
+| "Page not found" al abrir una URL antigua | La página de inicio (Panorama) se sirve en `/` | Usa `http://localhost:8501/` o las rutas de la sección 3 |
 | Error al compilar `netCDF4` o `geopandas` | Python fuera del rango soportado | Usa Python 3.11–3.13 (`uv python pin 3.12 && uv sync`) |
 
 Para reinstalar el entorno desde cero:

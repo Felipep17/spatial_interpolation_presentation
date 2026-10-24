@@ -7,88 +7,14 @@ import streamlit as st
 
 from components.charts import mostrar, serie_temporal
 from components.theme import MAP_HEIGHT, RASTER_VARS, VarSpec
-from components.ui import empty_state, metric_card, render_header, section_title, tabla_resumen
-from utils import (
-    calcular_estadisticas_zonales,
-    cargar_grilla_nc,
-    cargar_recorte_nc,
-    estadisticas_zonales,
-    generar_mapa_dual,
-    generar_mapa_interactivo,
-    generar_mapa_simple,
-    listar_fuentes,
-    resumen_extent,
-)
-
-FUENTES_META = {
-    "C3S": {
-        "nombre": "Copernicus C3S · AgERA5",
-        "desc": "Indicadores agrometeorológicos diarios derivados del reanálisis ERA5 (0.1°).",
-        "url": "https://cds.climate.copernicus.eu/datasets/sis-agrometeorological-indicators?tab=overview",
-    },
-    "CHIRPS": {
-        "nombre": "CHIRPS v3.0",
-        "desc": "Precipitación diaria cuasi-global combinando satélite y estaciones (0.05°).",
-        "url": "https://www.chc.ucsb.edu/data/chirps3",
-    },
-    "MSWEP": {
-        "nombre": "MSWEP",
-        "desc": "Precipitación diaria multi-fuente ponderada: satélite, reanálisis y pluviómetros (0.1°).",
-        "url": "https://www.gloh2o.org/mswep/",
-    },
-    "GEE": {
-        "nombre": "Google Earth Engine · MODIS 1 km",
-        "desc": "NDVI y NDWI diarios de MOD09GA promediados a una grilla de 0.009° (~1 km), sin nubes.",
-        "url": "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD09GA",
-    },
-}
-
-
-# =========================================================================
-# Procesamiento cacheado (clave: rutas + fecha de modificación)
-# =========================================================================
-@st.cache_data(show_spinner=False)
-def _bundle_c3s(_gdf, f_rh: str, f_t: str, bounds: tuple, mtimes: tuple):
-    da_rh, lat_c, lon_c, pad = cargar_recorte_nc(Path(f_rh), bounds)
-    da_t, _, _, _ = cargar_recorte_nc(Path(f_t), bounds)
-    gdf_b, stats, times, lats, lons = calcular_estadisticas_zonales(_gdf, da_rh, da_t, lat_c, lon_c, pad)
-    mapa = generar_mapa_interactivo(gdf_b, da_rh, da_t, stats, times, lats, lons, pad)
-    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad,
-            "extent": resumen_extent(_gdf, lats, lons, pad)}
-
-
-@st.cache_data(show_spinner=False)
-def _bundle_precip(_gdf, f_nc: str, mtime: float, titulo: str):
-    da_p, lats, lons, pad = cargar_grilla_nc(Path(f_nc), "precipitation")
-    times = pd.to_datetime(da_p.time.values)
-    gdf_b, stats = estadisticas_zonales(_gdf, {"p": da_p.values}, lats, lons, pad, decimales=2)
-    mapa = generar_mapa_simple(gdf_b, da_p.values, "p", titulo, "Precipitación diaria",
-                               stats, times, lats, lons, pad)
-    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad,
-            "extent": resumen_extent(_gdf, lats, lons, pad)}
-
-
-@st.cache_data(show_spinner=False)
-def _bundle_gee(_gdf, f_ndvi: str, f_ndwi: str, mtimes: tuple):
-    da_v, lats, lons, pad = cargar_grilla_nc(Path(f_ndvi), "NDVI")
-    da_w, *_ = cargar_grilla_nc(Path(f_ndwi), "NDWI")
-    times = pd.to_datetime(da_v.time.values)
-    gdf_b, stats = estadisticas_zonales(_gdf, {"ndvi": da_v.values, "ndwi": da_w.values}, lats, lons, pad,
-                                        decimales=3)
-    capas = [("ndvi", da_v.values, RASTER_VARS["ndvi"], "NDVI"), ("ndwi", da_w.values, RASTER_VARS["ndwi"], "NDWI")]
-    mapa = generar_mapa_dual(gdf_b, capas, "GEE · MODIS 1 km", stats, times, lats, lons, pad)
-    sin_nubes = np.isfinite(da_v.values).mean(axis=(1, 2)) * 100
-    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad,
-            "forma": (len(lats), len(lons)), "sin_nubes": sin_nubes,
-            "extent": resumen_extent(_gdf, lats, lons, pad)}
-
-
-def _serie_area(stats, clave: str) -> np.ndarray:
-    """Promedio diario entre barrios de las series zonales."""
-    mat = np.array([[np.nan if v is None else v for v in s[clave]] for s in stats], dtype=float)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        return np.nanmean(mat, axis=0)
+from components.ui import boton_descarga, empty_state, metric_card, render_header, section_title, tabla_resumen
+from datos import FUENTES_META
+from datos import bundle_c3s as _bundle_c3s
+from datos import bundle_gee as _bundle_gee
+from datos import bundle_precip as _bundle_precip
+from datos import resolucion as _resolucion
+from datos import serie_area as _serie_area
+from utils import listar_fuentes
 
 
 def _bloque_extent(r: dict, unidad: str = "píxeles"):
@@ -105,11 +31,6 @@ def _bloque_extent(r: dict, unidad: str = "píxeles"):
         ("Barrios dentro de una sola celda",
          f"{r['barrios_una_celda']:,} de {r['n_barrios']:,} ({100 * r['barrios_una_celda'] / r['n_barrios']:.0f} %)"),
     ])
-
-
-def _resolucion(grados: float) -> str:
-    km = grados * 111.32
-    return f"{grados:.3f}° · ~{km:.1f} km" if grados < 0.05 else f"{grados:.2f}° · ~{km:.0f} km"
 
 
 # =========================================================================
@@ -193,8 +114,8 @@ def _render_c3s(gdf, archivos):
                     neutral_delta=True, chart=np.round(t, 1).tolist(), chart_type="area")
     with k3:
         metric_card("Último día · Tmax", s_t.fmt(t[-1]),
-                    delta=round(float(t[-1] - np.nanmean(t)), 1), delta_description="vs. media del periodo",
-                    delta_color="off", help=f"{times[-1]:%d/%m/%Y}")
+                    delta=f"{float(t[-1] - np.nanmean(t)):+.1f} °C", delta_description="vs. media del periodo",
+                    delta_color="off", neutral_delta=True, help=f"{times[-1]:%d/%m/%Y}")
     with k4:
         metric_card("Cobertura", f"{len(times)} días", delta=periodo, neutral_delta=True,
                     help=f"Resolución {_resolucion(b['res'])}")
@@ -240,6 +161,7 @@ def _render_c3s(gdf, archivos):
             "Tmax diaria": st.column_config.LineChartColumn(),
         },
     )
+    boton_descarga(df, "barrios_agera5_c3s", key="dl_c3s")
 
 
 def _render_precip(gdf, f_nc: Path, fuente: str):
@@ -300,6 +222,7 @@ def _render_precip(gdf, f_nc: Path, fuente: str):
             "Precipitación diaria": st.column_config.BarChartColumn(y_min=0),
         },
     )
+    boton_descarga(df, f"barrios_{fuente.lower()}_precipitacion", key=f"dl_{fuente.lower()}")
 
 
 COMANDOS_DESCARGA = {
@@ -402,6 +325,7 @@ def _render_gee(gdf, archivos):
             "NDWI diario": st.column_config.LineChartColumn(),
         },
     )
+    boton_descarga(df, "barrios_gee_ndvi_ndwi", key="dl_gee")
 
 
 def _render_inventario(nombre, archivos):
