@@ -199,7 +199,29 @@ MAP_CSS = f"""
       box-shadow: 0 8px 24px rgba(11,11,11,.08); padding: 14px 14px 12px; font-size: 12.5px;
   }}
   .gc-panel-title {{ font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
-      color: {COLORS["muted"]}; margin-bottom: 8px; }}
+      color: {COLORS["muted"]}; margin-bottom: 8px; cursor: pointer; list-style: none;
+      display: flex; justify-content: space-between; align-items: center; user-select: none; }}
+  .gc-panel-title::-webkit-details-marker {{ display: none; }}
+  .gc-panel-title::after {{ content: "▾"; font-size: 12px; transition: transform .15s ease; }}
+  .gc-panel:not([open]) {{ padding-bottom: 6px; width: auto; }}
+  .gc-panel:not([open]) .gc-panel-title {{ margin-bottom: 0; gap: 10px; }}
+  .gc-panel:not([open]) .gc-panel-title::after {{ transform: rotate(-90deg); }}
+
+  /* Móvil: sin botones de zoom (se usa el gesto), panel compacto y control temporal ajustado */
+  @media (max-width: 640px) {{
+      .leaflet-control-zoom {{ display: none; }}
+      .leaflet-control-scale {{ display: none; }}
+      .gc-panel {{ left: 8px; top: 8px; width: auto; max-width: calc(100% - 64px); padding: 10px 12px; font-size: 12px; }}
+      .gc-panel[open] {{ max-height: calc(100% - 90px); overflow-y: auto; }}
+      .gc-seg label {{ font-size: 11px; padding: 5px 2px; }}
+      .gc-readout-big {{ font-size: 15px; }}
+      .leaflet-bar-timecontrol {{ max-width: calc(100vw - 20px); }}
+      .leaflet-bar-timecontrol .timecontrol-speed,
+      .leaflet-bar-timecontrol .timecontrol-loop {{ display: none !important; }}
+      .leaflet-bar-timecontrol .timecontrol-slider .slider {{ width: 90px !important; }}
+      .leaflet-bar-timecontrol .timecontrol-date {{ min-width: 0 !important; padding: 0 6px !important; font-size: 11px !important; }}
+      .leaflet-control-attribution {{ font-size: 8px; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  }}
   .gc-seg {{ display: flex; background: {COLORS["surface_alt"]}; border-radius: 8px; padding: 3px; gap: 2px; margin-bottom: 12px; }}
   .gc-seg label {{ flex: 1; text-align: center; cursor: pointer; padding: 5px 4px; border-radius: 6px;
       font-size: 11.5px; font-weight: 500; color: {COLORS["ink_2"]}; transition: all .15s ease; }}
@@ -340,6 +362,11 @@ def _grilla_js(arr, dec):
 # JS común: lectura del píxel bajo el cursor y del promedio zonal del barrio
 _JS_LECTURA = """
 var GC = window.GC;
+// En móvil el panel arranca plegado para no tapar el mapa (se despliega tocando el título)
+if (window.innerWidth <= 640) {
+    var panel = document.querySelector('.gc-panel');
+    if (panel) panel.removeAttribute('open');
+}
 GC.tIdx = function() {
     var td = GC.map.timeDimension;
     return td ? Math.max(0, td.getCurrentTimeIndex()) : 0;
@@ -431,15 +458,15 @@ def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons
         for n, (c, _, sp, _, cm, _) in enumerate(prep)
     )
     m.get_root().html.add_child(Element(f"""
-    <div class="gc-panel">
-        <div class="gc-panel-title">{titulo}</div>
+    <details class="gc-panel" open>
+        <summary class="gc-panel-title">{titulo}</summary>
         <div class="gc-seg">
             {radios}
             <label><input type="radio" name="gc-var" value="none" onchange="GC.cambiar('none')">Ocultar</label>
         </div>
         {leyendas}
         {_HTML_LECTURA}
-    </div>
+    </details>
     """))
 
     js = _datos_js(m, capa, grid, barrios_stats, {c: sp.unidad for c, _, sp, *_ in prep}, k0)
@@ -491,11 +518,11 @@ def generar_mapa_simple(gdf_b, arr, clave, titulo, leyenda, barrios_stats, time_
             clave: _grilla_js(arr, spec.decimales)}
 
     m.get_root().html.add_child(Element(f"""
-    <div class="gc-panel">
-        <div class="gc-panel-title">{titulo}</div>
+    <details class="gc-panel" open>
+        <summary class="gc-panel-title">{titulo}</summary>
         {leyenda_html(cm, spec, leyenda, opacidad=RASTER_OPACITY)}
         {_HTML_LECTURA}
-    </div>
+    </details>
     """))
     js = _datos_js(m, capa, grid, barrios_stats, {clave: spec.unidad}, clave) + _JS_LECTURA
     _ScriptMapa(js).add_to(m)

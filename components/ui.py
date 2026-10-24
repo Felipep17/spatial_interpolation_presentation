@@ -134,6 +134,51 @@ def apply_custom_css():
         font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
         color: {c["muted"]}; text-align: center;
     }}
+
+    /* ===================== Móvil (≤ 640 px): el escritorio no cambia ===================== */
+    @media (max-width: 640px) {{
+        [data-testid="stMainBlockContainer"] {{
+            padding-top: 3.5rem; padding-left: 1rem; padding-right: 1rem; padding-bottom: 2rem;
+        }}
+        /* Encabezado: título arriba, insignias debajo */
+        .gc-header {{ flex-direction: column; align-items: flex-start; gap: 10px; padding-bottom: 14px; }}
+        .gc-title {{ font-size: 22px; }}
+        .gc-subtitle {{ font-size: 13px; }}
+        .gc-badges {{ justify-content: flex-start; }}
+        .gc-section {{ margin-top: 16px; }}
+
+        /* Tarjetas KPI: altura según contenido en vez de fija */
+        [data-testid="stMetric"],
+        [data-testid="stElementContainer"]:has(> [data-testid="stMetric"]) {{
+            height: auto !important; min-height: 0 !important;
+        }}
+        [data-testid="stMetric"]:hover {{ transform: none; }}
+        /* Filas de KPIs: cuadrícula 2 × 2 en lugar de una tarjeta por fila */
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {{
+            flex-direction: row !important; flex-wrap: wrap !important; gap: 8px !important;
+        }}
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > [data-testid="stColumn"] {{
+            flex: 1 1 calc(50% - 4px) !important; width: calc(50% - 4px) !important;
+            min-width: calc(50% - 4px) !important;
+        }}
+        [data-testid="stMetric"] {{ padding: 10px 12px !important; }}
+        [data-testid="stMetricValue"] {{ font-size: 1.25rem !important; }}
+        [data-testid="stMetricLabel"] p {{ font-size: 11px !important; }}
+
+        /* Selectores segmentados (fuentes, variables): pasan a varias líneas */
+        [data-testid="stButtonGroup"], [data-testid="stButtonGroup"] > div {{
+            flex-wrap: wrap !important; max-width: 100%;
+        }}
+
+        /* Resúmenes etiqueta → valor: el valor baja si no cabe */
+        .gc-grid-summary {{ padding: 8px 10px; }}
+        .gc-grid-summary .gc-readout-row {{ flex-wrap: wrap; gap: 2px 12px; }}
+        .gc-grid-summary .gc-readout-row span:last-child {{ text-align: left; }}
+
+        .gc-legend {{ max-width: 100%; }}
+        .st-key-gc_aliados {{ padding: 12px; margin-top: 32px; }}
+        .gc-footer {{ flex-direction: column; gap: 4px; }}
+    }}
     </style>
     """
     st.html(css)

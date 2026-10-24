@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="GeoClima Cali",
     page_icon=":material/public:",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",  # abierta en escritorio, cerrada en móvil
 )
 apply_custom_css()
 
