@@ -19,7 +19,7 @@ def apply_custom_css():
     css = f"""
     <style>
     [data-testid="stMainBlockContainer"] {{
-        padding-top: 2rem;
+        padding-top: 4rem;  /* debajo de la barra superior de Streamlit Cloud (Fork, GitHub) */
         padding-bottom: 3rem;
         max-width: 1480px;
     }}

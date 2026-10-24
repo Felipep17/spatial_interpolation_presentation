@@ -51,10 +51,16 @@ def cargar_shapefile(carpeta: Path):
     return gdf
 
 
+# Orden de presentación de las fuentes; las no listadas van al final en orden alfabético
+ORDEN_FUENTES = ["C3S", "CHIRPS", "MSWEP", "GEE"]
+
+
 def listar_fuentes(raster_dir: Path):
     fuentes = {}
     if raster_dir.exists():
-        for d in sorted([p for p in raster_dir.iterdir() if p.is_dir()]):
+        carpetas = [p for p in raster_dir.iterdir() if p.is_dir()]
+        orden = {n: i for i, n in enumerate(ORDEN_FUENTES)}
+        for d in sorted(carpetas, key=lambda c: (orden.get(c.name.upper(), len(orden)), c.name)):
             fuentes[d.name] = sorted(list(d.glob("*.nc")) + list(d.glob("*.tif")))
     return fuentes
 
