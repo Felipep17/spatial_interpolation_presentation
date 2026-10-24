@@ -52,7 +52,7 @@ def serie_temporal(
         plot_bgcolor=COLORS["page"],
         paper_bgcolor=COLORS["page"],
         xaxis=dict(hoverformat=fmt_fecha),
-        yaxis=dict(title=dict(text=spec.unidad, standoff=6), rangemode="tozero" if spec.forma == "barra" else "normal"),
+        yaxis=dict(title=dict(text=spec.unidad or spec.label, standoff=6), rangemode="tozero" if spec.forma == "barra" else "normal"),
     )
     if selector_rango:
         fig.update_xaxes(

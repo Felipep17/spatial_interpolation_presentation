@@ -94,13 +94,17 @@ def cargar_recorte_nc(nc_path: Path, bounds, res=0.1):
     return da, lat_col, lon_col, pad
 
 
-def cargar_chirps(nc_path: Path):
+def cargar_grilla_nc(nc_path: Path, var: str | None = None):
+    """NetCDF ya recortado (CHIRPS, MSWEP, GEE): variable, centros de píxel y medio paso."""
     with xr.open_dataset(nc_path) as ds:
-        da_p = ds["precipitation"].load()
+        if var is None:
+            var = next(v for v in ds.data_vars if len(ds[v].dims) >= 2 and v not in ("spatial_ref", "crs"))
+        da_p = ds[var].load()
     lat_col = "lat" if "lat" in da_p.coords else "latitude"
     lon_col = "lon" if "lon" in da_p.coords else "longitude"
-    lats = da_p[lat_col].values
-    lons = da_p[lon_col].values
+    # float64 y redondeo: algunos productos (MSWEP) guardan coordenadas float32 con ruido
+    lats = np.round(da_p[lat_col].values.astype(float), 6)
+    lons = np.round(da_p[lon_col].values.astype(float), 6)
     pad = (
         abs(float(lats[1] - lats[0])) / 2.0
         if len(lats) > 1
@@ -389,52 +393,62 @@ def _datos_js(m, capa, grid, barrios, units, var_inicial):
     )
 
 
-def generar_mapa_interactivo(gdf_b, da_rh, da_t, barrios_stats, time_vals, lats, lons, pad):
+def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons, pad):
+    """Visor temporal con dos variables alternables.
+
+    capas: [(clave, arreglo T×Ny×Nx, VarSpec, etiqueta corta), (…)]. La primera se muestra al abrir.
+    """
     m = mapa_base(gdf_b)
-    spec_rh, spec_t = RASTER_VARS["rh"], RASTER_VARS["t"]
-    arr_rh, arr_t = np.asarray(da_rh.values, float), np.asarray(da_t.values, float)
-
-    cm_rh = colormap(spec_rh.cmap, *escala_robusta(arr_rh))
-    cm_t = colormap(spec_t.cmap, *escala_robusta(arr_t))
     period, fmt = _periodo(time_vals)
+    prep = []
+    for clave, arr, spec, etiqueta in capas:
+        arr = np.asarray(arr, float)
+        cm = colormap(spec.cmap, *escala_robusta(arr, desde_cero=spec.forma == "barra"))
+        prep.append((clave, arr, spec, etiqueta, cm, _features_pixeles(arr, lats, lons, pad, time_vals, cm, RASTER_OPACITY)))
 
-    fc_rh = _features_pixeles(arr_rh, lats, lons, pad, time_vals, cm_rh, RASTER_OPACITY)
-    fc_t = _features_pixeles(arr_t, lats, lons, pad, time_vals, cm_t, RASTER_OPACITY)
-    tg_rh = _timestamped(fc_rh, period, fmt)
-    tg_rh.add_to(m)
+    (k0, _, _, _, _, fc0), (k1, _, _, _, _, fc1) = prep
+    tg0 = _timestamped(fc0, period, fmt)
+    tg0.add_to(m)
     capa = capa_barrios(gdf_b).add_to(m)
     folium.LayerControl(position="topright", collapsed=True).add_to(m)
 
     grid = {"lats": [float(x) for x in lats], "lons": [float(x) for x in lons], "pad": float(pad),
-            "rh": _grilla_js(arr_rh, 1), "t": _grilla_js(arr_t, 1)}
-
+            **{c: _grilla_js(a, sp.decimales) for c, a, sp, *_ in prep}}
+    radios = "".join(
+        f'<label><input type="radio" name="gc-var" value="{c}" {"checked" if n == 0 else ""} '
+        f'onchange="GC.cambiar(\'{c}\')">{et}</label>'
+        for n, (c, _, _, et, _, _) in enumerate(prep)
+    )
+    leyendas = "".join(
+        f'<div id="gc-leg-{c}" style="display:{"block" if n == 0 else "none"}">'
+        f'{leyenda_html(cm, sp, opacidad=RASTER_OPACITY)}</div>'
+        for n, (c, _, sp, _, cm, _) in enumerate(prep)
+    )
     m.get_root().html.add_child(Element(f"""
     <div class="gc-panel">
-        <div class="gc-panel-title">C3S · AgERA5</div>
+        <div class="gc-panel-title">{titulo}</div>
         <div class="gc-seg">
-            <label><input type="radio" name="gc-var" value="rh" checked onchange="GC.cambiar('rh')">Humedad</label>
-            <label><input type="radio" name="gc-var" value="t" onchange="GC.cambiar('t')">Temp. máx.</label>
+            {radios}
             <label><input type="radio" name="gc-var" value="none" onchange="GC.cambiar('none')">Ocultar</label>
         </div>
-        <div id="gc-leg-rh">{leyenda_html(cm_rh, spec_rh, opacidad=RASTER_OPACITY)}</div>
-        <div id="gc-leg-t" style="display:none">{leyenda_html(cm_t, spec_t, opacidad=RASTER_OPACITY)}</div>
+        {leyendas}
         {_HTML_LECTURA}
     </div>
     """))
 
-    js = _datos_js(m, capa, grid, barrios_stats, {"rh": spec_rh.unidad, "t": spec_t.unidad}, "rh")
+    js = _datos_js(m, capa, grid, barrios_stats, {c: sp.unidad for c, _, sp, *_ in prep}, k0)
     js += f"""
     window.GC.capas = {{
-        rh: {tg_rh.get_name()},
-        t: L.timeDimension.layer.geoJson(
-            L.geoJson({json.dumps(fc_t)}, {{ style: function(f) {{ return f.properties.style; }} }}),
+        {k0}: {tg0.get_name()},
+        {k1}: L.timeDimension.layer.geoJson(
+            L.geoJson({json.dumps(fc1)}, {{ style: function(f) {{ return f.properties.style; }} }}),
             {{ updateTimeDimension: false, duration: "{period}", period: "{period}" }}
         )
     }};
     window.GC.cambiar = function(tipo) {{
         var GC = window.GC;
         GC.var = tipo;
-        ['rh', 't'].forEach(function(k) {{
+        Object.keys(GC.capas).forEach(function(k) {{
             document.getElementById('gc-leg-' + k).style.display = (k === tipo) ? 'block' : 'none';
             if (k === tipo) {{ GC.map.addLayer(GC.capas[k]); }} else {{ GC.map.removeLayer(GC.capas[k]); }}
         }});
@@ -449,28 +463,35 @@ def generar_mapa_interactivo(gdf_b, da_rh, da_t, barrios_stats, time_vals, lats,
     return m
 
 
-def generar_mapa_chirps(gdf_b, da_p, lats, lons, pad, barrios_stats, time_vals):
-    m = mapa_base(gdf_b)
-    spec = RASTER_VARS["p"]
-    arr = np.asarray(da_p.values, float)
-    cm_p = colormap(spec.cmap, *escala_robusta(arr, desde_cero=True))
+def generar_mapa_interactivo(gdf_b, da_rh, da_t, barrios_stats, time_vals, lats, lons, pad):
+    capas = [("rh", da_rh.values, RASTER_VARS["rh"], "Humedad"), ("t", da_t.values, RASTER_VARS["t"], "Temp. máx.")]
+    return generar_mapa_dual(gdf_b, capas, "C3S · AgERA5", barrios_stats, time_vals, lats, lons, pad)
 
-    fc = _features_pixeles(arr, lats, lons, pad, time_vals, cm_p, RASTER_OPACITY)
-    _timestamped(fc, "P1D", "YYYY-MM-DD").add_to(m)
+
+def generar_mapa_simple(gdf_b, arr, clave, titulo, leyenda, barrios_stats, time_vals, lats, lons, pad):
+    """Visor temporal de una sola variable (precipitación CHIRPS / MSWEP)."""
+    m = mapa_base(gdf_b)
+    spec = RASTER_VARS[clave]
+    arr = np.asarray(arr, float)
+    cm = colormap(spec.cmap, *escala_robusta(arr, desde_cero=spec.forma == "barra"))
+    period, fmt = _periodo(time_vals)
+
+    fc = _features_pixeles(arr, lats, lons, pad, time_vals, cm, RASTER_OPACITY)
+    _timestamped(fc, period, fmt).add_to(m)
     capa = capa_barrios(gdf_b).add_to(m)
     folium.LayerControl(position="topright", collapsed=True).add_to(m)
 
     grid = {"lats": [float(x) for x in lats], "lons": [float(x) for x in lons], "pad": float(pad),
-            "p": _grilla_js(arr, 2)}
+            clave: _grilla_js(arr, spec.decimales)}
 
     m.get_root().html.add_child(Element(f"""
     <div class="gc-panel">
-        <div class="gc-panel-title">CHIRPS v3.0</div>
-        {leyenda_html(cm_p, spec, "Precipitación diaria", opacidad=RASTER_OPACITY)}
+        <div class="gc-panel-title">{titulo}</div>
+        {leyenda_html(cm, spec, leyenda, opacidad=RASTER_OPACITY)}
         {_HTML_LECTURA}
     </div>
     """))
-    js = _datos_js(m, capa, grid, barrios_stats, {"p": spec.unidad}, "p") + _JS_LECTURA
+    js = _datos_js(m, capa, grid, barrios_stats, {clave: spec.unidad}, clave) + _JS_LECTURA
     _ScriptMapa(js).add_to(m)
     return m
 
@@ -525,3 +546,68 @@ def cargar_y_procesar_estaciones(csv_path: Path):
     )
 
     return df_semanal, estaciones_info
+
+
+# =========================================================================
+# Grilla de 1 km (la misma de los NetCDF de GEE)
+# =========================================================================
+@st.cache_data(show_spinner=False)
+def grilla_1km_estaciones(_gdf, estaciones: pd.DataFrame, gee_nc: str | None, mtime: float | None):
+    """Celdas de 1 km que tocan Cali con sus estaciones, barrios y fracción de área dentro de la ciudad.
+
+    Si existe el NetCDF de GEE se usan sus coordenadas; si no, la grilla teórica idéntica.
+    """
+    from descargas.comun import RES_1KM, grilla_1km
+
+    if gee_nc:
+        _, lats, lons, pad = cargar_grilla_nc(Path(gee_nc))
+        origen = "GEE"
+    else:
+        lats, lons, _ = grilla_1km(tuple(_gdf.total_bounds))
+        pad, origen = RES_1KM / 2, "teórica"
+
+    ii, jj = np.divmod(np.arange(len(lats) * len(lons)), len(lons))
+    celdas = gpd.GeoDataFrame(
+        {"fila": ii, "col": jj, "lat": lats[ii], "lon": lons[jj]},
+        geometry=shapely.box(lons[jj] - pad, lats[ii] - pad, lons[jj] + pad, lats[ii] + pad),
+        crs="EPSG:4326",
+    )
+    total = len(celdas)
+
+    barrios = preparar_barrios(_gdf)
+    cali = barrios.geometry.union_all()
+    celdas = celdas[celdas.intersects(cali)].copy()
+
+    utm = "EPSG:32618"  # UTM 18N: áreas en m² para Cali
+    celdas_utm = celdas.to_crs(utm)
+    cali_utm = gpd.GeoSeries([cali], crs="EPSG:4326").to_crs(utm).iloc[0]
+    celdas["pct_cali"] = (celdas_utm.intersection(cali_utm).area / celdas_utm.area * 100).round(0)
+
+    b_idx, c_idx = shapely.STRtree(celdas.geometry.values).query(barrios.geometry.values, predicate="intersects")
+    celdas["n_barrios"] = np.bincount(c_idx, minlength=len(celdas))
+    barrios_por_celda = pd.Series(np.bincount(b_idx, minlength=len(barrios)))
+
+    pts = gpd.GeoDataFrame(estaciones, geometry=gpd.points_from_xy(estaciones["Longitud"], estaciones["Latitud"]),
+                           crs="EPSG:4326")
+    unidas = gpd.sjoin(pts, celdas[["geometry"]], predicate="within", how="inner")
+    por_celda = unidas.groupby("index_right")["Estacion"].agg(list)
+    celdas["n_est"] = celdas.index.map(por_celda.str.len()).fillna(0).astype(int)
+    celdas["estaciones"] = celdas.index.map(lambda k: ", ".join(por_celda.get(k, [])) or "—")
+    celdas["celda"] = celdas.apply(lambda r: f"F{r.fila + 1:02d} · C{r.col + 1:02d}", axis=1)
+    celdas["centro"] = celdas.apply(lambda r: f"{r.lat:.4f}°, {r.lon:.4f}°", axis=1)
+
+    resumen = {
+        "origen": origen,
+        "forma": (len(lats), len(lons)),
+        "res": 2 * pad,
+        "total": total,
+        "tocan_cali": len(celdas),
+        "dentro_50": int((celdas["pct_cali"] >= 50).sum()),
+        "con_estacion": int((celdas["n_est"] > 0).sum()),
+        "max_est": int(celdas["n_est"].max()) if len(celdas) else 0,
+        "fuera": int(len(pts) - len(unidas)),
+        "celdas_por_barrio_mediana": float(barrios_por_celda.median()),
+        "celdas_por_barrio_max": int(barrios_por_celda.max()),
+    }
+    cols = ["celda", "centro", "n_est", "estaciones", "n_barrios", "pct_cali", "geometry"]
+    return celdas[cols].reset_index(drop=True), resumen

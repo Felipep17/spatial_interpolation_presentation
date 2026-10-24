@@ -9,7 +9,7 @@ from streamlit_folium import st_folium
 from components.charts import mostrar, serie_temporal
 from components.theme import COLORS, VARIABLES, colormap, escala_robusta, leyenda_html
 from components.ui import empty_state, metric_card, render_header, section_title
-from utils import capa_barrios, cargar_y_procesar_estaciones, mapa_base, preparar_barrios
+from utils import capa_barrios, cargar_y_procesar_estaciones, grilla_1km_estaciones, mapa_base, preparar_barrios
 
 ETIQUETAS_CORTAS = {
     "Precipitacion": "Precipitación",
@@ -49,6 +49,66 @@ def _seleccionar(estacion: str):
     if estacion and estacion != st.session_state.get("estacion_sel"):
         st.session_state[_PENDIENTE] = estacion
         st.rerun()
+
+
+def _grilla(gdf, estaciones_info, inputs_path: Path):
+    gee = next(iter(sorted((inputs_path / "raster" / "GEE").glob("*ndvi*.nc"))), None)
+    return grilla_1km_estaciones(
+        gdf, estaciones_info, str(gee) if gee else None, gee.stat().st_mtime if gee else None
+    )
+
+
+def _capa_grilla(celdas) -> folium.FeatureGroup:
+    """Celdas transparentes (solo contorno); el detalle aparece al pasar el cursor."""
+    fg = folium.FeatureGroup(name="Grilla 1 km")
+    folium.GeoJson(
+        celdas,
+        style_function=lambda f: {
+            "fillColor": COLORS["accent"],
+            "fillOpacity": 0.0,
+            "color": COLORS["accent_dark"],
+            "weight": 0.8,
+            "opacity": 0.8,
+        },
+        highlight_function=lambda f: {"weight": 2.2, "fillOpacity": 0.12},
+        tooltip=folium.GeoJsonTooltip(
+            fields=["celda", "centro", "n_est", "estaciones", "n_barrios", "pct_cali"],
+            aliases=["Celda", "Centro", "Estaciones", "Nombres", "Barrios que toca", "% dentro de Cali"],
+            sticky=True,
+        ),
+    ).add_to(fg)
+    return fg
+
+
+def _resumen_grilla(celdas, r: dict):
+    ny, nx = r["forma"]
+    filas = [
+        ("Origen de la grilla", "NetCDF de GEE" if r["origen"] == "GEE" else "Teórica (aún sin descarga GEE)"),
+        ("Tamaño de celda", f"{r['res']:.3f}° · ~{r['res'] * 111.32:.2f} km"),
+        ("Celdas en la extensión", f"{r['total']:,} ({ny} × {nx})"),
+        ("Celdas que tocan Cali", f"{r['tocan_cali']:,}"),
+        ("Celdas con ≥ 50 % dentro de Cali", f"{r['dentro_50']:,}"),
+        ("Celdas con estación", f"{r['con_estacion']:,} de {r['tocan_cali']:,}"
+                                f" ({100 * r['con_estacion'] / max(r['tocan_cali'], 1):.0f} %)"),
+        ("Máx. estaciones en una celda", f"{r['max_est']}"),
+        ("Celdas por barrio", f"mediana {r['celdas_por_barrio_mediana']:.0f} · máx. {r['celdas_por_barrio_max']}"),
+    ]
+    if r["fuera"]:
+        filas.append(("Estaciones en celdas sin barrios (rurales)", f"{r['fuera']}"))
+    filas_html = "".join(
+        f'<div class="gc-readout-row"><span>{k}</span><span>{v}</span></div>' for k, v in filas
+    )
+    st.html(f'<div class="gc-grid-summary">{filas_html}</div>')
+    con_est = celdas[celdas["n_est"] > 0].sort_values("n_est", ascending=False)
+    with st.expander(f"Celdas con estaciones ({len(con_est)})"):
+        st.dataframe(
+            con_est.drop(columns="geometry"),
+            hide_index=True,
+            column_config={
+                "celda": "Celda", "centro": "Centro", "n_est": "Estaciones", "estaciones": "Nombres",
+                "n_barrios": "Barrios", "pct_cali": st.column_config.NumberColumn("% en Cali", format="%d %%"),
+            },
+        )
 
 
 def render(gdf, inputs_path: Path):
@@ -152,7 +212,13 @@ def render(gdf, inputs_path: Path):
     c_mapa, c_serie = st.columns([1, 1.35], gap="medium")
 
     with c_mapa:
-        section_title("Red de sensores", f"Color: media de {spec.label.lower()} por estación.")
+        t1, t2 = st.columns([3, 2], vertical_alignment="bottom")
+        with t1:
+            section_title("Red de sensores", f"Color: media de {spec.label.lower()} por estación.")
+        with t2:
+            ver_grilla = st.toggle("Grilla 1 km (GEE)", key="grilla_1km",
+                                   help="Celdas de 0.009° (~1 km), las mismas de los NetCDF de GEE. "
+                                        "Pase el cursor sobre una celda para ver su detalle.")
         medias = resumen.set_index("Estación")["Media"]
         cm = colormap(spec.cmap, *escala_robusta(medias.values))
 
@@ -177,18 +243,25 @@ def render(gdf, inputs_path: Path):
                 tooltip=nombre,
             ).add_to(fg)
 
+        grupos = [fg]
+        if ver_grilla:
+            celdas, info_grilla = _grilla(gdf, estaciones_info, inputs_path)
+            grupos = [_capa_grilla(celdas), fg]  # la grilla debajo de los marcadores
+
         salida = st_folium(
             m,
             key="mapa_estaciones",
             height=MAPA_ALTO,
             use_container_width=True,
-            feature_group_to_add=fg,
+            feature_group_to_add=grupos,
             returned_objects=["last_object_clicked_tooltip"],
         )
         st.html(leyenda_html(cm, spec, f"Media por estación · {spec.label}"))
+        if ver_grilla:
+            _resumen_grilla(celdas, info_grilla)
 
         clic = (salida or {}).get("last_object_clicked_tooltip")
-        if clic and clic != st.session_state.get("_ultimo_clic"):
+        if clic in con_datos and clic != st.session_state.get("_ultimo_clic"):
             st.session_state["_ultimo_clic"] = clic
             _seleccionar(clic)
 

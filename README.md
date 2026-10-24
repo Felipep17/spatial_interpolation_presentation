@@ -8,7 +8,9 @@ Integra tres fuentes de información sobre la capa de barrios de la ciudad:
 |---|---|---|
 | **Fuentes satelitales** | Copernicus C3S · AgERA5 (0.1°) | Humedad relativa y temperatura máxima diarias, visor temporal y estadísticas zonales por barrio |
 | | CHIRPS v3.0 (0.05°) | Precipitación diaria, visor temporal y acumulados por barrio |
-| **Estaciones in situ** | Red de estaciones meteorológicas (CSV) | Series agregadas por **semana epidemiológica (INS/CDC, domingo a sábado)**, mapa de la red y completitud por estación |
+| | MSWEP (0.1°) | Precipitación diaria multi-fuente, mismo visor que CHIRPS |
+| | Google Earth Engine · MODIS (1 km) | NDVI y NDWI diarios sin nubes, visor temporal y estadísticas por barrio |
+| **Estaciones in situ** | Red de estaciones meteorológicas (CSV) | Series agregadas por **semana epidemiológica (INS/CDC, domingo a sábado)**, mapa de la red, completitud y **grilla de 1 km** activable |
 
 ---
 
@@ -17,7 +19,7 @@ Integra tres fuentes de información sobre la capa de barrios de la ciudad:
 1. [Requisitos](#1-requisitos)
 2. [Instalación rápida](#2-instalación-rápida)
 3. [Ejecutar la aplicación](#3-ejecutar-la-aplicación)
-4. [Datos de entrada](#4-datos-de-entrada)
+4. [Datos de entrada](#4-datos-de-entrada) · [Descarga de GEE y MSWEP](#44-descarga-de-gee-y-mswep)
 5. [Estructura del proyecto](#5-estructura-del-proyecto)
 6. [Configuración y personalización](#6-configuración-y-personalización)
 7. [Metodología](#7-metodología)
@@ -180,7 +182,42 @@ Columnas requeridas (pueden existir otras; se ignoran):
 
 Los valores vacíos se tratan como dato faltante.
 
-### 4.4 Logo institucional — `inputs/logo.png` (opcional)
+### 4.4 Descarga de GEE y MSWEP
+
+Los scripts de `descargas/` (adaptados de [climate_data_downloader](https://github.com/dagudelo30/climate_data_downloader)) toman **el mismo periodo del NetCDF de CHIRPS**, recortan a Cali y escriben NetCDF listos para la app. Sus dependencias van en un grupo aparte:
+
+```bash
+uv sync --group descarga
+```
+
+**Google Earth Engine — NDVI y NDWI a 1 km** → `inputs/raster/GEE/{ndvi,ndwi}_modis_1km_<AAAA_MM>_cali.nc`
+
+1. Tener un proyecto de Google Cloud registrado en Earth Engine (<https://code.earthengine.google.com/register>).
+2. Autenticarse una vez: `uv run --group descarga earthengine authenticate`
+3. Descargar:
+   ```bash
+   uv run --group descarga python -m descargas.gee --project <ID_PROYECTO_GCP>
+   ```
+
+- Fuente: `MODIS/061/MOD09GA` diario. NDVI = (b02 − b01)/(b02 + b01); NDWI (Gao) = (b02 − b06)/(b02 + b06).
+- Los píxeles de 500 m se **promedian** sobre una grilla fija de **0.009° (~1 km)** definida en `descargas/comun.py`.
+- Nubes, sombras y nubes internas se enmascaran con la banda QA `state_1km` (`--sin-mascara-nubes` lo desactiva). En días nublados las celdas quedan vacías.
+
+**MSWEP — precipitación diaria 0.1°** → `inputs/raster/MSWEP/mswep_<AAAA_MM>_cali.nc`
+
+1. Solicitar acceso en <https://www.gloh2o.org/mswep/> con su cuenta de Google (GloH2O comparte la carpeta de Drive).
+2. En Google Cloud Console: habilitar la API de Google Drive y crear un cliente OAuth tipo **Aplicación de escritorio**; descargar su JSON.
+3. Descargar:
+   ```bash
+   uv run --group descarga python -m descargas.mswep --client-secret /ruta/client.json
+   ```
+
+- Cada archivo global se descarga a un temporal, se recorta a Cali y se descarta.
+- El token (solo lectura de Drive) se guarda en `~/.config/geoclima/mswep_token.json`, fuera del repositorio.
+
+Ambos scripts aceptan `--inicio AAAA-MM-DD --fin AAAA-MM-DD` para otro periodo. Si falta algún archivo, la vista correspondiente muestra el comando exacto de descarga.
+
+### 4.5 Logo institucional — `inputs/logo.png` (opcional)
 
 PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a la derecha de cada página y en tamaño completo en el pie de página. El margen transparente se recorta automáticamente.
 
@@ -192,6 +229,7 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 .
 ├── app.py                  # Punto de entrada: configuración, barra lateral y navegación
 ├── utils.py                # Carga de datos, estadísticas zonales y construcción de mapas
+├── descargas/              # Scripts de descarga: GEE (NDVI/NDWI 1 km) y MSWEP; grilla de 1 km común
 ├── views/
 │   ├── satelital.py        # Módulo 01 · Fuentes satelitales (C3S, CHIRPS, inventario)
 │   └── estaciones.py       # Módulo 02 · Estaciones in situ
@@ -239,6 +277,10 @@ Para cada barrio y cada día se calcula el **promedio simple de los píxeles cuy
 
 Los límites de cada paleta se fijan en los **percentiles 2 y 98** de los datos (la precipitación parte de 0), para que los valores extremos no saturen el mapa. Las leyendas se generan desde el mismo colormap que pinta los datos.
 
+### Grilla de 1 km en estaciones
+
+El interruptor **Grilla 1 km (GEE)** del mapa de estaciones dibuja, totalmente transparentes, las celdas de 0.009° que tocan los barrios de Cali: las mismas del NetCDF de GEE (o la grilla teórica idéntica si aún no se ha descargado). Al pasar el cursor por una celda se ve su identificador, centro, estaciones que contiene, barrios que toca y porcentaje de su área dentro de Cali; debajo del mapa se resume cuántas celdas quedan en el área, cuántas tienen estación y cuántas celdas abarca cada barrio.
+
 ### Agregación semanal de estaciones
 
 Los datos diarios se agrupan por **semana epidemiológica según INS Colombia / CDC (MMWR)**:
@@ -265,7 +307,7 @@ uv lock --upgrade && uv sync
 uv export --no-hashes --no-dev --no-emit-project -o requirements.txt
 
 # Linter
-uv run ruff check app.py utils.py components views
+uv run ruff check app.py utils.py components views descargas
 ```
 
 Recomendado: instalar `watchdog` para que la recarga automática sea más eficiente.

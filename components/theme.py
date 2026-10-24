@@ -59,7 +59,7 @@ class VarSpec:
     def fmt(self, v) -> str:
         if v is None or (isinstance(v, float) and np.isnan(v)):
             return "—"
-        return f"{v:,.{self.decimales}f} {self.unidad}"
+        return f"{v:,.{self.decimales}f} {self.unidad}".strip()
 
 
 VARIABLES = {
@@ -75,6 +75,9 @@ RASTER_VARS = {
     "rh": VarSpec("Humedad relativa", "%", "diaria", "viridis"),
     "t": VarSpec("Temperatura máxima", "°C", "diaria", "YlOrRd_09"),
     "p": VarSpec("Precipitación", "mm", "diaria", "Blues_09", "barra", 2),
+    # Índices adimensionales (−1 a 1)
+    "ndvi": VarSpec("NDVI", "", "diario", "YlGn_09", decimales=2),
+    "ndwi": VarSpec("NDWI", "", "diario", "GnBu_09", decimales=2),
 }
 
 
@@ -91,7 +94,7 @@ def escala_robusta(values, low: float = 2, high: float = 98, desde_cero: bool = 
     vmax = float(np.percentile(arr, high))
     if vmax - vmin < 1e-6:
         vmax = vmin + 1.0
-    return round(vmin, 1), round(vmax, 1)
+    return round(vmin, 2), round(vmax, 2)
 
 
 def colormap(nombre: str, vmin: float, vmax: float) -> bcm.LinearColormap:
@@ -108,8 +111,10 @@ def gradiente_css(cm: bcm.LinearColormap, pasos: int = 12) -> str:
 def leyenda_html(cm: bcm.LinearColormap, spec: VarSpec, titulo: str | None = None, ticks: int = 5,
                  opacidad: float = 1.0) -> str:
     """Leyenda continua: degradado y marcas generados desde el colormap real (misma opacidad que la capa)."""
+    unidad = f" <span>({escape(spec.unidad)})</span>" if spec.unidad else ""
     valores = np.linspace(cm.vmin, cm.vmax, ticks)
-    dec = 0 if (cm.vmax - cm.vmin) >= 20 else 1
+    rango = cm.vmax - cm.vmin
+    dec = 0 if rango >= 20 else 1 if rango >= 2 else 2
     etiquetas = []
     for k, v in enumerate(valores):
         txt = f"{v:,.{dec}f}"
@@ -120,7 +125,7 @@ def leyenda_html(cm: bcm.LinearColormap, spec: VarSpec, titulo: str | None = Non
         etiquetas.append(f"<span>{txt}</span>")
     return f"""
     <div class="gc-legend">
-        <div class="gc-legend-title">{escape(titulo or spec.label)} <span>({escape(spec.unidad)})</span></div>
+        <div class="gc-legend-title">{escape(titulo or spec.label)}{unidad}</div>
         <div class="gc-legend-bar" style="background: {gradiente_css(cm)}; opacity: {opacidad};"></div>
         <div class="gc-legend-ticks">{''.join(etiquetas)}</div>
         <div class="gc-legend-note">Escala p2–p98 · extremos recortados</div>

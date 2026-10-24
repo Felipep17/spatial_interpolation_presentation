@@ -84,6 +84,21 @@ def apply_custom_css():
     }}
     .gc-legend-note {{ font-size: 10px; color: {c["muted"]}; margin-top: 2px; }}
 
+    /* Resumen de la grilla de 1 km */
+    .gc-grid-summary {{
+        border: 1px solid {c["grid"]}; border-radius: 10px; background: {c["surface"]};
+        padding: 10px 14px; margin-top: 10px; font-size: 12.5px;
+    }}
+    .gc-grid-summary .gc-readout-row {{
+        display: flex; justify-content: space-between; gap: 12px; padding: 3px 0;
+        border-bottom: 1px solid {c["surface_alt"]};
+    }}
+    .gc-grid-summary .gc-readout-row:last-child {{ border-bottom: 0; }}
+    .gc-grid-summary .gc-readout-row span:first-child {{ color: {c["ink_2"]}; }}
+    .gc-grid-summary .gc-readout-row span:last-child {{
+        font-weight: 600; color: {c["ink"]}; text-align: right; font-variant-numeric: tabular-nums;
+    }}
+
     /* Estado vacío */
     .gc-empty {{
         border: 1px dashed {c["axis"]}; border-radius: 12px; padding: 36px 24px;

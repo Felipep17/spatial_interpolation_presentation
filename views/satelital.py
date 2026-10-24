@@ -6,15 +6,16 @@ import pandas as pd
 import streamlit as st
 
 from components.charts import mostrar, serie_temporal
-from components.theme import MAP_HEIGHT, RASTER_VARS
+from components.theme import MAP_HEIGHT, RASTER_VARS, VarSpec
 from components.ui import empty_state, metric_card, render_header, section_title
 from utils import (
     calcular_estadisticas_zonales,
-    cargar_chirps,
+    cargar_grilla_nc,
     cargar_recorte_nc,
     estadisticas_zonales,
-    generar_mapa_chirps,
+    generar_mapa_dual,
     generar_mapa_interactivo,
+    generar_mapa_simple,
     listar_fuentes,
 )
 
@@ -31,13 +32,13 @@ FUENTES_META = {
     },
     "MSWEP": {
         "nombre": "MSWEP",
-        "desc": "Precipitación global multi-fuente ponderada (satélite, reanálisis y pluviómetros).",
-        "url": "https://climatedataguide.ucar.edu/climate-data/global-high-resolution-precipitation-mswep",
+        "desc": "Precipitación diaria multi-fuente ponderada: satélite, reanálisis y pluviómetros (0.1°).",
+        "url": "https://www.gloh2o.org/mswep/",
     },
     "GEE": {
-        "nombre": "Google Earth Engine",
-        "desc": "Productos derivados exportados desde Earth Engine.",
-        "url": None,
+        "nombre": "Google Earth Engine · MODIS 1 km",
+        "desc": "NDVI y NDWI diarios de MOD09GA promediados a una grilla de 0.009° (~1 km), sin nubes.",
+        "url": "https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MOD09GA",
     },
 }
 
@@ -55,12 +56,27 @@ def _bundle_c3s(_gdf, f_rh: str, f_t: str, bounds: tuple, mtimes: tuple):
 
 
 @st.cache_data(show_spinner=False)
-def _bundle_chirps(_gdf, f_ch: str, mtime: float):
-    da_p, lats, lons, pad = cargar_chirps(Path(f_ch))
+def _bundle_precip(_gdf, f_nc: str, mtime: float, titulo: str):
+    da_p, lats, lons, pad = cargar_grilla_nc(Path(f_nc), "precipitation")
     times = pd.to_datetime(da_p.time.values)
     gdf_b, stats = estadisticas_zonales(_gdf, {"p": da_p.values}, lats, lons, pad, decimales=2)
-    mapa = generar_mapa_chirps(gdf_b, da_p, lats, lons, pad, stats, times)
+    mapa = generar_mapa_simple(gdf_b, da_p.values, "p", titulo, "Precipitación diaria",
+                               stats, times, lats, lons, pad)
     return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad}
+
+
+@st.cache_data(show_spinner=False)
+def _bundle_gee(_gdf, f_ndvi: str, f_ndwi: str, mtimes: tuple):
+    da_v, lats, lons, pad = cargar_grilla_nc(Path(f_ndvi), "NDVI")
+    da_w, *_ = cargar_grilla_nc(Path(f_ndwi), "NDWI")
+    times = pd.to_datetime(da_v.time.values)
+    gdf_b, stats = estadisticas_zonales(_gdf, {"ndvi": da_v.values, "ndwi": da_w.values}, lats, lons, pad,
+                                        decimales=3)
+    capas = [("ndvi", da_v.values, RASTER_VARS["ndvi"], "NDVI"), ("ndwi", da_w.values, RASTER_VARS["ndwi"], "NDWI")]
+    mapa = generar_mapa_dual(gdf_b, capas, "GEE · MODIS 1 km", stats, times, lats, lons, pad)
+    sin_nubes = np.isfinite(da_v.values).mean(axis=(1, 2)) * 100
+    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad,
+            "forma": (len(lats), len(lons)), "sin_nubes": sin_nubes}
 
 
 def _serie_area(stats, clave: str) -> np.ndarray:
@@ -72,7 +88,8 @@ def _serie_area(stats, clave: str) -> np.ndarray:
 
 
 def _resolucion(grados: float) -> str:
-    return f"{grados:.2f}° · ~{grados * 111:.0f} km"
+    km = grados * 111.32
+    return f"{grados:.3f}° · ~{km:.1f} km" if grados < 0.05 else f"{grados:.2f}° · ~{km:.0f} km"
 
 
 # =========================================================================
@@ -113,10 +130,17 @@ def render(gdf, inputs_path: Path):
             st.link_button("Documentación", meta["url"], icon=":material/open_in_new:", type="tertiary",
                            width="stretch")
 
-    if nombre.upper() == "C3S":
+    fuente = nombre.upper()
+    if fuente == "C3S":
         _render_c3s(gdf, archivos)
-    elif nombre.upper() == "CHIRPS":
-        _render_chirps(gdf, archivos)
+    elif fuente in ("CHIRPS", "MSWEP"):
+        f_nc = next((f for f in archivos if fuente.lower() in f.name.lower() and f.suffix == ".nc"), None)
+        if f_nc:
+            _render_precip(gdf, f_nc, fuente)
+        else:
+            _faltante(fuente, archivos)
+    elif fuente == "GEE":
+        _render_gee(gdf, archivos)
     else:
         _render_inventario(nombre, archivos)
 
@@ -197,14 +221,10 @@ def _render_c3s(gdf, archivos):
     )
 
 
-def _render_chirps(gdf, archivos):
-    f_ch = next((f for f in archivos if "chirps" in f.name.lower() and f.suffix == ".nc"), None)
-    if not f_ch:
-        empty_state("Sin archivo CHIRPS", "No se encontró un NetCDF de CHIRPS en la carpeta de la fuente.")
-        return
-
-    with st.spinner("Preparando visor CHIRPS…"):
-        b = _bundle_chirps(gdf, str(f_ch), f_ch.stat().st_mtime)
+def _render_precip(gdf, f_nc: Path, fuente: str):
+    titulo = FUENTES_META[fuente]["nombre"]
+    with st.spinner(f"Preparando visor {fuente}…"):
+        b = _bundle_precip(gdf, str(f_nc), f_nc.stat().st_mtime, titulo)
 
     times = b["times"]
     p = _serie_area(b["stats"], "p")
@@ -232,7 +252,7 @@ def _render_chirps(gdf, archivos):
                "Use el control temporal inferior para recorrer los días.")
 
     section_title("Precipitación diaria", "Promedio de las estadísticas zonales de todos los barrios.")
-    mostrar(serie_temporal(times, p, spec, height=280), key="chirps_p")
+    mostrar(serie_temporal(times, p, spec, height=280), key=f"{fuente.lower()}_p")
 
     section_title("Resumen por barrio", "Estadísticos del periodo calculados sobre la serie zonal diaria.")
     filas = []
@@ -256,6 +276,107 @@ def _render_chirps(gdf, archivos):
             "Máx. diario (mm)": st.column_config.NumberColumn(format="%.1f"),
             "Días ≥ 1 mm": st.column_config.NumberColumn(format="%d"),
             "Precipitación diaria": st.column_config.BarChartColumn(y_min=0),
+        },
+    )
+
+
+COMANDOS_DESCARGA = {
+    "GEE": "uv run --group descarga python -m descargas.gee --project <ID_PROYECTO_GCP>",
+    "MSWEP": "uv run --group descarga python -m descargas.mswep --client-secret /ruta/client.json",
+    "CHIRPS": None,
+}
+
+
+def _faltante(fuente: str, archivos):
+    """Estado vacío con la instrucción exacta para descargar la fuente."""
+    empty_state(f"{fuente}: aún no hay datos descargados",
+                "Ejecute la descarga desde la raíz del proyecto; el periodo se toma del archivo de CHIRPS.")
+    if COMANDOS_DESCARGA.get(fuente):
+        st.code(COMANDOS_DESCARGA[fuente], language="bash")
+    if archivos:
+        _render_inventario(fuente, archivos)
+
+
+def _render_gee(gdf, archivos):
+    f_ndvi = next((f for f in archivos if "ndvi" in f.name.lower() and f.suffix == ".nc"), None)
+    f_ndwi = next((f for f in archivos if "ndwi" in f.name.lower() and f.suffix == ".nc"), None)
+    if not (f_ndvi and f_ndwi):
+        _faltante("GEE", archivos)
+        return
+
+    with st.spinner("Preparando visor GEE…"):
+        b = _bundle_gee(gdf, str(f_ndvi), str(f_ndwi), (f_ndvi.stat().st_mtime, f_ndwi.stat().st_mtime))
+
+    times, sin_nubes = b["times"], b["sin_nubes"]
+    ndvi, ndwi = _serie_area(b["stats"], "ndvi"), _serie_area(b["stats"], "ndwi")
+    s_v, s_w = RASTER_VARS["ndvi"], RASTER_VARS["ndwi"]
+    dias_validos = int(np.isfinite(ndvi).sum())
+    ny, nx = b["forma"]
+
+    def _rango(serie):
+        return f"{np.nanmin(serie):.2f} a {np.nanmax(serie):.2f}" if np.isfinite(serie).any() else "sin datos"
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        metric_card("NDVI medio", s_v.fmt(np.nanmean(ndvi)) if dias_validos else "—", delta=_rango(ndvi),
+                    delta_description="rango diario", neutral_delta=True,
+                    chart=[round(float(v), 3) for v in ndvi if np.isfinite(v)], chart_type="line",
+                    help="Promedio de las series zonales de todos los barrios (días sin nubes).")
+    with k2:
+        metric_card("NDWI medio", s_w.fmt(np.nanmean(ndwi)) if dias_validos else "—", delta=_rango(ndwi),
+                    delta_description="rango diario", neutral_delta=True,
+                    chart=[round(float(v), 3) for v in ndwi if np.isfinite(v)], chart_type="line")
+    with k3:
+        metric_card("Días con datos", f"{dias_validos} de {len(times)}",
+                    delta=f"{np.mean(sin_nubes):.0f} % de celdas sin nubes en promedio", neutral_delta=True,
+                    chart=np.round(sin_nubes, 0).tolist(), chart_type="bar",
+                    help="Un día cuenta si al menos un barrio tiene píxeles despejados.")
+    with k4:
+        metric_card("Resolución espacial", _resolucion(b["res"]), delta=f"Grilla {ny} × {nx} celdas",
+                    neutral_delta=True)
+
+    st.iframe(b["html"], height=MAP_HEIGHT)
+    st.caption("Las celdas vacías corresponden a nubes o sombras enmascaradas ese día. "
+               "Desplace el cursor para leer la celda y el promedio zonal del barrio.")
+
+    section_title("Series diarias", "Promedio de las estadísticas zonales de todos los barrios; los huecos son días nublados.")
+    c1, c2, c3 = st.columns(3)
+    for col, serie, spec, clave in ((c1, ndvi, s_v, "gee_ndvi"), (c2, ndwi, s_w, "gee_ndwi")):
+        with col:
+            st.markdown(f"**{spec.label}**")
+            ref = float(np.nanmean(serie)) if dias_validos else None
+            mostrar(serie_temporal(times, serie, spec, height=240, referencia=ref), key=clave)
+    with c3:
+        st.markdown("**Celdas sin nubes**")
+        spec_c = VarSpec("Celdas sin nubes", "%", "diaria", "Blues_09", "barra", 0)
+        mostrar(serie_temporal(times, sin_nubes, spec_c, height=240), key="gee_nubes")
+
+    section_title("Resumen por barrio", "Estadísticos del periodo sobre los días con píxeles despejados.")
+    filas = []
+    for s in b["stats"]:
+        v = np.array([np.nan if x is None else x for x in s["ndvi"]], float)
+        w = np.array([np.nan if x is None else x for x in s["ndwi"]], float)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            filas.append({
+                "Barrio": s["nom"], "Celdas 1 km": s["n_pix"], "Días válidos": int(np.isfinite(v).sum()),
+                # Mini-gráficos solo con días despejados (no admiten huecos)
+                "NDVI medio": np.nanmean(v), "NDVI diario": [x for x in s["ndvi"] if x is not None],
+                "NDWI medio": np.nanmean(w), "NDWI diario": [x for x in s["ndwi"] if x is not None],
+            })
+    df = pd.DataFrame(filas).sort_values("NDVI medio", ascending=False)
+    st.dataframe(
+        df,
+        hide_index=True,
+        height=380,
+        column_config={
+            "Barrio": st.column_config.TextColumn(pinned=True),
+            "Celdas 1 km": st.column_config.NumberColumn(format="%d", width="small"),
+            "Días válidos": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=len(times)),
+            "NDVI medio": st.column_config.NumberColumn(format="%.3f"),
+            "NDVI diario": st.column_config.LineChartColumn(),
+            "NDWI medio": st.column_config.NumberColumn(format="%.3f"),
+            "NDWI diario": st.column_config.LineChartColumn(),
         },
     )
 
