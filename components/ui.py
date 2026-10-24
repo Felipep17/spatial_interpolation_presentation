@@ -196,6 +196,14 @@ def metric_card(
     )
 
 
+def tabla_resumen(filas: list[tuple[str, str]]):
+    """Bloque compacto de pares etiqueta → valor (resúmenes de grillas)."""
+    filas_html = "".join(
+        f'<div class="gc-readout-row"><span>{escape(k)}</span><span>{escape(v)}</span></div>' for k, v in filas
+    )
+    st.html(f'<div class="gc-grid-summary">{filas_html}</div>')
+
+
 def empty_state(title: str, body: str):
     st.html(
         f"""

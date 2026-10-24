@@ -7,7 +7,7 @@ import streamlit as st
 
 from components.charts import mostrar, serie_temporal
 from components.theme import MAP_HEIGHT, RASTER_VARS, VarSpec
-from components.ui import empty_state, metric_card, render_header, section_title
+from components.ui import empty_state, metric_card, render_header, section_title, tabla_resumen
 from utils import (
     calcular_estadisticas_zonales,
     cargar_grilla_nc,
@@ -17,6 +17,7 @@ from utils import (
     generar_mapa_interactivo,
     generar_mapa_simple,
     listar_fuentes,
+    resumen_extent,
 )
 
 FUENTES_META = {
@@ -52,7 +53,8 @@ def _bundle_c3s(_gdf, f_rh: str, f_t: str, bounds: tuple, mtimes: tuple):
     da_t, _, _, _ = cargar_recorte_nc(Path(f_t), bounds)
     gdf_b, stats, times, lats, lons = calcular_estadisticas_zonales(_gdf, da_rh, da_t, lat_c, lon_c, pad)
     mapa = generar_mapa_interactivo(gdf_b, da_rh, da_t, stats, times, lats, lons, pad)
-    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad}
+    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad,
+            "extent": resumen_extent(_gdf, lats, lons, pad)}
 
 
 @st.cache_data(show_spinner=False)
@@ -62,7 +64,8 @@ def _bundle_precip(_gdf, f_nc: str, mtime: float, titulo: str):
     gdf_b, stats = estadisticas_zonales(_gdf, {"p": da_p.values}, lats, lons, pad, decimales=2)
     mapa = generar_mapa_simple(gdf_b, da_p.values, "p", titulo, "Precipitación diaria",
                                stats, times, lats, lons, pad)
-    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad}
+    return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad,
+            "extent": resumen_extent(_gdf, lats, lons, pad)}
 
 
 @st.cache_data(show_spinner=False)
@@ -76,7 +79,8 @@ def _bundle_gee(_gdf, f_ndvi: str, f_ndwi: str, mtimes: tuple):
     mapa = generar_mapa_dual(gdf_b, capas, "GEE · MODIS 1 km", stats, times, lats, lons, pad)
     sin_nubes = np.isfinite(da_v.values).mean(axis=(1, 2)) * 100
     return {"html": mapa.get_root().render(), "stats": stats, "times": times, "res": 2 * pad,
-            "forma": (len(lats), len(lons)), "sin_nubes": sin_nubes}
+            "forma": (len(lats), len(lons)), "sin_nubes": sin_nubes,
+            "extent": resumen_extent(_gdf, lats, lons, pad)}
 
 
 def _serie_area(stats, clave: str) -> np.ndarray:
@@ -85,6 +89,22 @@ def _serie_area(stats, clave: str) -> np.ndarray:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         return np.nanmean(mat, axis=0)
+
+
+def _bloque_extent(r: dict, unidad: str = "píxeles"):
+    """Cuántas celdas tiene la grilla de la fuente y cuántas cubren realmente a Cali."""
+    ny, nx = r["forma"]
+    section_title("Grilla de la fuente",
+                  "Celdas del archivo frente a los barrios de Cali (criterio: la celda intersecta el barrio).")
+    tabla_resumen([
+        ("Resolución", _resolucion(r["res"])),
+        ("Celdas en el extent del archivo", f"{r['total']:,} ({ny} × {nx})"),
+        ("Celdas que tocan Cali", f"{r['tocan_cali']:,} ({100 * r['tocan_cali'] / max(r['total'], 1):.0f} % del extent)"),
+        ("Celdas con ≥ 50 % dentro de Cali", f"{r['dentro_50']:,}"),
+        (f"{unidad.capitalize()} por barrio", f"mediana {r['por_barrio_mediana']:.0f} · máx. {r['por_barrio_max']}"),
+        ("Barrios dentro de una sola celda",
+         f"{r['barrios_una_celda']:,} de {r['n_barrios']:,} ({100 * r['barrios_una_celda'] / r['n_barrios']:.0f} %)"),
+    ])
 
 
 def _resolucion(grados: float) -> str:
@@ -182,6 +202,7 @@ def _render_c3s(gdf, archivos):
     st.iframe(b["html"], height=MAP_HEIGHT)
     st.caption("Desplace el cursor sobre el mapa para leer el píxel y el promedio zonal del barrio. "
                "Use el control temporal inferior para recorrer los días.")
+    _bloque_extent(b["extent"])
 
     section_title("Series diarias", "Promedio de las estadísticas zonales de todos los barrios.")
     c1, c2 = st.columns(2)
@@ -250,6 +271,7 @@ def _render_precip(gdf, f_nc: Path, fuente: str):
     st.iframe(b["html"], height=MAP_HEIGHT)
     st.caption("Desplace el cursor sobre el mapa para leer el píxel y el promedio zonal del barrio. "
                "Use el control temporal inferior para recorrer los días.")
+    _bloque_extent(b["extent"])
 
     section_title("Precipitación diaria", "Promedio de las estadísticas zonales de todos los barrios.")
     mostrar(serie_temporal(times, p, spec, height=280), key=f"{fuente.lower()}_p")
@@ -338,6 +360,7 @@ def _render_gee(gdf, archivos):
     st.iframe(b["html"], height=MAP_HEIGHT)
     st.caption("Las celdas vacías corresponden a nubes o sombras enmascaradas ese día. "
                "Desplace el cursor para leer la celda y el promedio zonal del barrio.")
+    _bloque_extent(b["extent"], unidad="celdas 1 km")
 
     section_title("Series diarias", "Promedio de las estadísticas zonales de todos los barrios; los huecos son días nublados.")
     c1, c2, c3 = st.columns(3)

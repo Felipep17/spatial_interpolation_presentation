@@ -8,7 +8,7 @@ from streamlit_folium import st_folium
 
 from components.charts import mostrar, serie_temporal
 from components.theme import COLORS, VARIABLES, colormap, escala_robusta, leyenda_html
-from components.ui import empty_state, metric_card, render_header, section_title
+from components.ui import empty_state, metric_card, render_header, section_title, tabla_resumen
 from utils import capa_barrios, cargar_y_procesar_estaciones, grilla_1km_estaciones, mapa_base, preparar_barrios
 
 ETIQUETAS_CORTAS = {
@@ -19,7 +19,7 @@ ETIQUETAS_CORTAS = {
     "Velocidad del viento": "Viento",
     "Radiación solar": "Radiación",
 }
-MAPA_ALTO = 560
+MAPA_ALTO = 640
 _PENDIENTE = "_estacion_pendiente"
 
 
@@ -95,10 +95,7 @@ def _resumen_grilla(celdas, r: dict):
     ]
     if r["fuera"]:
         filas.append(("Estaciones en celdas sin barrios (rurales)", f"{r['fuera']}"))
-    filas_html = "".join(
-        f'<div class="gc-readout-row"><span>{k}</span><span>{v}</span></div>' for k, v in filas
-    )
-    st.html(f'<div class="gc-grid-summary">{filas_html}</div>')
+    tabla_resumen(filas)
     con_est = celdas[celdas["n_est"] > 0].sort_values("n_est", ascending=False)
     with st.expander(f"Celdas con estaciones ({len(con_est)})"):
         st.dataframe(
@@ -209,7 +206,7 @@ def render(gdf, inputs_path: Path):
     # ---------------------------------------------------------------------
     # Mapa + serie temporal
     # ---------------------------------------------------------------------
-    c_mapa, c_serie = st.columns([1, 1.35], gap="medium")
+    c_mapa, c_serie = st.columns([1.2, 1.3], gap="medium")
 
     with c_mapa:
         t1, t2 = st.columns([3, 2], vertical_alignment="bottom")
@@ -223,7 +220,10 @@ def render(gdf, inputs_path: Path):
         cm = colormap(spec.cmap, *escala_robusta(medias.values))
 
         m = mapa_base(gdf)
-        capa_barrios(preparar_barrios(gdf), con_pixeles=False).add_to(m)
+        # El tooltip de cada barrio indica cuántas celdas de 1 km (GEE) toca
+        celdas, info_grilla, celdas_por_barrio = _grilla(gdf, estaciones_info, inputs_path)
+        barrios = preparar_barrios(gdf).assign(n_pixeles=celdas_por_barrio)
+        capa_barrios(barrios, alias_pixeles="Celdas GEE (1 km)").add_to(m)
 
         fg = folium.FeatureGroup(name="Estaciones")
         info = estaciones_info[estaciones_info["Estacion"].isin(con_datos)]
@@ -245,7 +245,6 @@ def render(gdf, inputs_path: Path):
 
         grupos = [fg]
         if ver_grilla:
-            celdas, info_grilla = _grilla(gdf, estaciones_info, inputs_path)
             grupos = [_capa_grilla(celdas), fg]  # la grilla debajo de los marcadores
 
         salida = st_folium(

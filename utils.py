@@ -257,9 +257,9 @@ def mapa_base(gdf, height: int | str = "100%", controles: bool = True) -> folium
     return m
 
 
-def capa_barrios(gdf_b, con_pixeles: bool = True) -> folium.GeoJson:
+def capa_barrios(gdf_b, con_pixeles: bool = True, alias_pixeles: str = "Píxeles") -> folium.GeoJson:
     campos = ["nombre_barrio", "n_pixeles"] if con_pixeles else ["nombre_barrio"]
-    alias = ["Barrio", "Píxeles"] if con_pixeles else ["Barrio"]
+    alias = ["Barrio", alias_pixeles] if con_pixeles else ["Barrio"]
     return folium.GeoJson(
         gdf_b[["b_id"] + campos + ["geometry"]],
         name="Límites Cali",
@@ -549,11 +549,59 @@ def cargar_y_procesar_estaciones(csv_path: Path):
 
 
 # =========================================================================
+# Celdas de una grilla raster frente a Cali (común a todas las fuentes)
+# =========================================================================
+def celdas_sobre_cali(barrios, lats, lons, pad):
+    """Celdas de la grilla que tocan algún barrio, con % de su área dentro de Cali.
+
+    Devuelve (celdas que tocan Cali, total de celdas del extent, celdas que toca cada barrio).
+    """
+    lats, lons = np.asarray(lats, float), np.asarray(lons, float)
+    ii, jj = np.divmod(np.arange(len(lats) * len(lons)), len(lons))
+    celdas = gpd.GeoDataFrame(
+        {"fila": ii, "col": jj, "lat": lats[ii], "lon": lons[jj]},
+        geometry=shapely.box(lons[jj] - pad, lats[ii] - pad, lons[jj] + pad, lats[ii] + pad),
+        crs="EPSG:4326",
+    )
+    total = len(celdas)
+    cali = barrios.geometry.union_all()
+    celdas = celdas[celdas.intersects(cali)].copy()
+
+    utm = "EPSG:32618"  # UTM 18N: áreas en m² para Cali
+    celdas_utm = celdas.to_crs(utm)
+    cali_utm = gpd.GeoSeries([cali], crs="EPSG:4326").to_crs(utm).iloc[0]
+    celdas["pct_cali"] = (celdas_utm.intersection(cali_utm).area / celdas_utm.area * 100).round(0)
+
+    b_idx, c_idx = shapely.STRtree(celdas.geometry.values).query(barrios.geometry.values, predicate="intersects")
+    celdas["n_barrios"] = np.bincount(c_idx, minlength=len(celdas))
+    # Mismo criterio "intersecta" de las estadísticas zonales
+    celdas_por_barrio = np.bincount(b_idx, minlength=len(barrios))
+    return celdas, total, celdas_por_barrio
+
+
+def resumen_extent(gdf, lats, lons, pad) -> dict:
+    """Conteo de celdas de una fuente raster: en el extent del archivo y sobre Cali."""
+    celdas, total, por_barrio = celdas_sobre_cali(preparar_barrios(gdf), lats, lons, pad)
+    return {
+        "forma": (len(lats), len(lons)),
+        "res": 2 * pad,
+        "total": total,
+        "tocan_cali": len(celdas),
+        "dentro_50": int((celdas["pct_cali"] >= 50).sum()),
+        "por_barrio_mediana": float(np.median(por_barrio)),
+        "por_barrio_max": int(por_barrio.max()),
+        "barrios_una_celda": int((por_barrio == 1).sum()),
+        "n_barrios": len(por_barrio),
+    }
+
+
+# =========================================================================
 # Grilla de 1 km (la misma de los NetCDF de GEE)
 # =========================================================================
 @st.cache_data(show_spinner=False)
 def grilla_1km_estaciones(_gdf, estaciones: pd.DataFrame, gee_nc: str | None, mtime: float | None):
-    """Celdas de 1 km que tocan Cali con sus estaciones, barrios y fracción de área dentro de la ciudad.
+    """Celdas de 1 km que tocan Cali con sus estaciones, barrios y fracción de área dentro de la ciudad,
+    más el número de celdas que toca cada barrio (en el orden de la capa de barrios).
 
     Si existe el NetCDF de GEE se usan sus coordenadas; si no, la grilla teórica idéntica.
     """
@@ -566,26 +614,8 @@ def grilla_1km_estaciones(_gdf, estaciones: pd.DataFrame, gee_nc: str | None, mt
         lats, lons, _ = grilla_1km(tuple(_gdf.total_bounds))
         pad, origen = RES_1KM / 2, "teórica"
 
-    ii, jj = np.divmod(np.arange(len(lats) * len(lons)), len(lons))
-    celdas = gpd.GeoDataFrame(
-        {"fila": ii, "col": jj, "lat": lats[ii], "lon": lons[jj]},
-        geometry=shapely.box(lons[jj] - pad, lats[ii] - pad, lons[jj] + pad, lats[ii] + pad),
-        crs="EPSG:4326",
-    )
-    total = len(celdas)
-
     barrios = preparar_barrios(_gdf)
-    cali = barrios.geometry.union_all()
-    celdas = celdas[celdas.intersects(cali)].copy()
-
-    utm = "EPSG:32618"  # UTM 18N: áreas en m² para Cali
-    celdas_utm = celdas.to_crs(utm)
-    cali_utm = gpd.GeoSeries([cali], crs="EPSG:4326").to_crs(utm).iloc[0]
-    celdas["pct_cali"] = (celdas_utm.intersection(cali_utm).area / celdas_utm.area * 100).round(0)
-
-    b_idx, c_idx = shapely.STRtree(celdas.geometry.values).query(barrios.geometry.values, predicate="intersects")
-    celdas["n_barrios"] = np.bincount(c_idx, minlength=len(celdas))
-    barrios_por_celda = pd.Series(np.bincount(b_idx, minlength=len(barrios)))
+    celdas, total, celdas_por_barrio = celdas_sobre_cali(barrios, lats, lons, pad)
 
     pts = gpd.GeoDataFrame(estaciones, geometry=gpd.points_from_xy(estaciones["Longitud"], estaciones["Latitud"]),
                            crs="EPSG:4326")
@@ -606,8 +636,8 @@ def grilla_1km_estaciones(_gdf, estaciones: pd.DataFrame, gee_nc: str | None, mt
         "con_estacion": int((celdas["n_est"] > 0).sum()),
         "max_est": int(celdas["n_est"].max()) if len(celdas) else 0,
         "fuera": int(len(pts) - len(unidas)),
-        "celdas_por_barrio_mediana": float(barrios_por_celda.median()),
-        "celdas_por_barrio_max": int(barrios_por_celda.max()),
+        "celdas_por_barrio_mediana": float(np.median(celdas_por_barrio)),
+        "celdas_por_barrio_max": int(celdas_por_barrio.max()),
     }
     cols = ["celda", "centro", "n_est", "estaciones", "n_barrios", "pct_cali", "geometry"]
-    return celdas[cols].reset_index(drop=True), resumen
+    return celdas[cols].reset_index(drop=True), resumen, celdas_por_barrio
