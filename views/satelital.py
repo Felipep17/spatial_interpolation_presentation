@@ -6,30 +6,88 @@ import pandas as pd
 import streamlit as st
 
 from components.charts import mostrar, serie_temporal
+from components.i18n import conservar, t, t_comuna
+from components.nav import enlace_barrio
 from components.theme import MAP_HEIGHT, RASTER_VARS, VarSpec
 from components.ui import boton_descarga, empty_state, metric_card, render_header, section_title, tabla_resumen
-from datos import FUENTES_META
-from datos import bundle_c3s as _bundle_c3s
-from datos import bundle_gee as _bundle_gee
-from datos import bundle_precip as _bundle_precip
+from datos import FUENTES_META, INDICADORES, cargar, mapa_html, meta_txt
+from datos import archivos as _archivos
 from datos import resolucion as _resolucion
 from datos import serie_area as _serie_area
-from utils import listar_fuentes
+from utils import geojson_barrios, listar_fuentes, orden_comunas, preparar_barrios
+from views.explorador import TODA_CALI, explorador, nombre_ambito
+
+# Las etiquetas también van en la URL (?fuente=…&vista=…): cortas y sin símbolos
+VISTAS = {"diario": "sat.vista_diario", "periodo": "sat.vista_periodo"}
+ETIQUETA_FUENTE = {"C3S": "AgERA5", "CHIRPS": "CHIRPS", "MSWEP": "MSWEP", "GEE": "MODIS"}
 
 
-def _bloque_extent(r: dict, unidad: str = "píxeles"):
+def _visor(gdf, b: dict, fuente: str, rutas: dict, ayuda: str):
+    """Visor diario (raster por píxel) o coropleta del periodo por barrio, a elección del usuario."""
+    conservar("vista")
+    vista = st.segmented_control(t("sat.vista"), list(VISTAS), format_func=lambda v: t(VISTAS[v]), default="diario",
+                                 required=True, key="vista", bind="query-params", label_visibility="collapsed",
+                                 help=t("sat.vista_ayuda"))
+    if vista == "periodo":
+        indicadores = [i for i in INDICADORES if i.fuente == fuente]
+        explorador(preparar_barrios(gdf), {fuente: b}, indicadores, key=f"sat_{fuente.lower()}", alto=MAP_HEIGHT)
+        return
+    html = mapa_html(fuente, gdf, rutas)  # HTML por idioma, sobre el bundle ya cacheado
+    st.iframe(html, height=MAP_HEIGHT)
+    c_txt, c_dl = st.columns([4, 1], vertical_alignment="center")
+    with c_txt:
+        st.caption(ayuda)
+    with c_dl:
+        st.download_button(t("dl.html"), html.encode("utf-8"), file_name=f"visor_{fuente.lower()}.html",
+                           mime="text/html", icon=":material/download:", type="tertiary", key=f"dl_html_{fuente}",
+                           help=t("dl.html_ayuda"))
+
+
+def _tabla_barrios(gdf, df: pd.DataFrame, column_config: dict, nombre: str, key: str):
+    """Tabla por barrio con comuna, filtro por comuna, enlace al perfil y descargas CSV/GeoJSON.
+
+    `df` trae la columna del barrio con el encabezado traducido (t("gen.barrio")).
+    """
+    barrio, comuna = t("gen.barrio"), t("gen.comuna")
+    barrios = preparar_barrios(gdf)
+    df = df.merge(barrios[["nombre_barrio", "comuna"]].rename(columns={"nombre_barrio": barrio, "comuna": "_comuna"}),
+                  on=barrio, how="left")
+    df.insert(1, comuna, df["_comuna"].map(t_comuna))
+    c_fil, c_link = st.columns([1, 2], vertical_alignment="bottom")
+    conservar(f"{key}_comuna")
+    with c_fil:
+        ambito = st.selectbox(comuna, [TODA_CALI, *orden_comunas(barrios["comuna"])], key=f"{key}_comuna",
+                              format_func=nombre_ambito)
+    if ambito != TODA_CALI:
+        df = df[df["_comuna"] == ambito]
+    df = df.drop(columns="_comuna")
+    evento = st.dataframe(
+        df, hide_index=True, height=380, on_select="rerun", selection_mode="single-row", key=f"{key}_tabla",
+        column_config={barrio: st.column_config.TextColumn(pinned=True), comuna: st.column_config.TextColumn(),
+                       **column_config},
+    )
+    filas = evento.selection.rows if evento else []
+    with c_link:
+        if filas:
+            enlace_barrio(df.iloc[filas[0]][barrio])
+        else:
+            st.caption(f":material/touch_app: {t('sat.fila_pista')}")
+    boton_descarga(df, nombre, key=key, geojson=geojson_barrios(barrios, df, barrio))
+
+
+def _bloque_extent(r: dict, clave_unidad: str = "sat.pixeles_barrio"):
     """Cuántas celdas tiene la grilla de la fuente y cuántas cubren realmente a Cali."""
     ny, nx = r["forma"]
-    section_title("Grilla de la fuente",
-                  "Celdas del archivo frente a los barrios de Cali (criterio: la celda intersecta el barrio).")
+    section_title(t("sat.grilla"), t("sat.grilla_cap"))
     tabla_resumen([
-        ("Resolución", _resolucion(r["res"])),
-        ("Celdas en el extent del archivo", f"{r['total']:,} ({ny} × {nx})"),
-        ("Celdas que tocan Cali", f"{r['tocan_cali']:,} ({100 * r['tocan_cali'] / max(r['total'], 1):.0f} % del extent)"),
-        ("Celdas con ≥ 50 % dentro de Cali", f"{r['dentro_50']:,}"),
-        (f"{unidad.capitalize()} por barrio", f"mediana {r['por_barrio_mediana']:.0f} · máx. {r['por_barrio_max']}"),
-        ("Barrios dentro de una sola celda",
-         f"{r['barrios_una_celda']:,} de {r['n_barrios']:,} ({100 * r['barrios_una_celda'] / r['n_barrios']:.0f} %)"),
+        (t("gen.resolucion"), _resolucion(r["res"])),
+        (t("sat.celdas_extent"), f"{r['total']:,} ({ny} × {nx})"),
+        (t("sat.celdas_tocan"), t("sat.celdas_tocan_val", n=f"{r['tocan_cali']:,}",
+                                  pct=f"{100 * r['tocan_cali'] / max(r['total'], 1):.0f}")),
+        (t("sat.celdas_50"), f"{r['dentro_50']:,}"),
+        (t(clave_unidad), t("gen.mediana_max", m=f"{r['por_barrio_mediana']:.0f}", x=r["por_barrio_max"])),
+        (t("sat.barrios_una_celda"), t("gen.a_de_b_pct", a=f"{r['barrios_una_celda']:,}", b=f"{r['n_barrios']:,}",
+                                       pct=f"{100 * r['barrios_una_celda'] / r['n_barrios']:.0f}")),
     ])
 
 
@@ -40,101 +98,99 @@ def render(gdf, inputs_path: Path):
     fuentes = listar_fuentes(inputs_path / "raster")
 
     render_header(
-        title="Fuentes satelitales y reanálisis",
-        subtitle="Exploración espaciotemporal de productos raster y estadísticas zonales por barrio.",
-        eyebrow="Módulo 01 · Raster",
-        badges=[("Fuentes", "violet", str(len(fuentes))), ("Barrios", "gray", f"{len(gdf):,}")],
+        title=t("sat.titulo"),
+        subtitle=t("sat.subtitulo"),
+        eyebrow=t("sat.eyebrow"),
+        badges=[(t("gen.fuentes"), "violet", str(len(fuentes))), (t("gen.barrios"), "gray", f"{len(gdf):,}")],
     )
 
     if not fuentes:
-        empty_state("Sin fuentes raster", "No se encontraron carpetas en inputs/raster.")
+        empty_state(t("gen.sin_fuentes_raster"), t("sat.sin_carpetas"))
         return
 
     opciones = list(fuentes)
     nombre = st.segmented_control(
-        "Fuente",
+        t("sat.fuente"),
         opciones,
         default=opciones[0],
         required=True,
-        key="fuente_satelital",
-        format_func=lambda k: f"{k}  ·  {len(fuentes[k])}",
+        key="fuente",
+        bind="query-params",
+        format_func=lambda k: ETIQUETA_FUENTE.get(k.upper(), k),
         label_visibility="collapsed",
     )
-    archivos = fuentes[nombre]
-    meta = FUENTES_META.get(nombre.upper(), {"nombre": nombre, "desc": "", "url": None})
-
-    c_info, c_link = st.columns([4, 1], vertical_alignment="center")
-    with c_info:
-        section_title(meta["nombre"], meta["desc"])
-    with c_link:
-        if meta["url"]:
-            st.link_button("Documentación", meta["url"], icon=":material/open_in_new:", type="tertiary",
+    lista = fuentes[nombre]
+    fuente = nombre.upper()
+    if fuente in FUENTES_META:
+        meta = FUENTES_META[fuente]
+        c_info, c_link = st.columns([4, 1], vertical_alignment="center")
+        with c_info:
+            section_title(meta["nombre"], meta_txt(fuente, "desc"))
+        with c_link:
+            st.link_button(t("sat.documentacion"), meta["url"], icon=":material/open_in_new:", type="tertiary",
                            width="stretch")
 
-    fuente = nombre.upper()
+    rutas = _archivos(fuente, lista)
     if fuente == "C3S":
-        _render_c3s(gdf, archivos)
-    elif fuente in ("CHIRPS", "MSWEP"):
-        f_nc = next((f for f in archivos if fuente.lower() in f.name.lower() and f.suffix == ".nc"), None)
-        if f_nc:
-            _render_precip(gdf, f_nc, fuente)
+        if rutas:
+            _render_c3s(gdf, rutas)
         else:
-            _faltante(fuente, archivos)
+            empty_state(t("sat.incompletos"), t("sat.incompletos_cuerpo"))
+    elif fuente in ("CHIRPS", "MSWEP"):
+        if rutas:
+            _render_precip(gdf, rutas, fuente)
+        else:
+            _faltante(fuente, lista)
     elif fuente == "GEE":
-        _render_gee(gdf, archivos)
+        if rutas:
+            _render_gee(gdf, rutas)
+        else:
+            _faltante(fuente, lista)
     else:
-        _render_inventario(nombre, archivos)
+        _render_inventario(nombre, lista)
 
 
-def _render_c3s(gdf, archivos):
-    f_rh = next((f for f in archivos if "relative_humidity" in f.name), None)
-    f_t = next((f for f in archivos if "temperature_maximu" in f.name or "t2m" in f.name), None)
-    if not (f_rh and f_t):
-        empty_state("Archivos incompletos", "Se requieren los NetCDF de humedad relativa y temperatura máxima.")
-        return
-
-    with st.spinner("Preparando visor C3S…"):
-        b = _bundle_c3s(gdf, str(f_rh), str(f_t), tuple(gdf.total_bounds),
-                        (f_rh.stat().st_mtime, f_t.stat().st_mtime))
+def _render_c3s(gdf, rutas: dict):
+    with st.spinner(t("sat.preparando", f="C3S")):
+        b = cargar("C3S", gdf, rutas)
 
     times = b["times"]
-    rh, t = _serie_area(b["stats"], "rh"), _serie_area(b["stats"], "t")
+    rh, tx = _serie_area(b["stats"], "rh"), _serie_area(b["stats"], "t")
     s_rh, s_t = RASTER_VARS["rh"], RASTER_VARS["t"]
     periodo = f"{times[0]:%d/%m/%Y} – {times[-1]:%d/%m/%Y}"
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        metric_card("Humedad relativa media", s_rh.fmt(np.nanmean(rh)),
-                    delta=f"{np.nanmin(rh):.0f}–{np.nanmax(rh):.0f} %", delta_description="rango diario",
+        metric_card(t("sat.kpi_hr"), s_rh.fmt(np.nanmean(rh)),
+                    delta=f"{np.nanmin(rh):.0f}–{np.nanmax(rh):.0f} %", delta_description=t("gen.rango_diario"),
                     neutral_delta=True, chart=np.round(rh, 1).tolist(), chart_type="area",
-                    help="Promedio de las series zonales de todos los barrios.")
+                    help=t("gen.promedio_series_todos"))
     with k2:
-        metric_card("Temperatura máxima media", s_t.fmt(np.nanmean(t)),
-                    delta=f"{np.nanmin(t):.1f}–{np.nanmax(t):.1f} °C", delta_description="rango diario",
-                    neutral_delta=True, chart=np.round(t, 1).tolist(), chart_type="area")
+        metric_card(t("sat.kpi_tmax"), s_t.fmt(np.nanmean(tx)),
+                    delta=f"{np.nanmin(tx):.1f}–{np.nanmax(tx):.1f} °C", delta_description=t("gen.rango_diario"),
+                    neutral_delta=True, chart=np.round(tx, 1).tolist(), chart_type="area")
     with k3:
-        metric_card("Último día · Tmax", s_t.fmt(t[-1]),
-                    delta=f"{float(t[-1] - np.nanmean(t)):+.1f} °C", delta_description="vs. media del periodo",
+        metric_card(t("sat.kpi_ultimo"), s_t.fmt(tx[-1]),
+                    delta=f"{float(tx[-1] - np.nanmean(tx)):+.1f} °C", delta_description=t("sat.vs_media_periodo"),
                     delta_color="off", neutral_delta=True, help=f"{times[-1]:%d/%m/%Y}")
     with k4:
-        metric_card("Cobertura", f"{len(times)} días", delta=periodo, neutral_delta=True,
-                    help=f"Resolución {_resolucion(b['res'])}")
+        metric_card(t("sat.kpi_cobertura"), t("gen.n_dias", n=len(times)), delta=periodo, neutral_delta=True,
+                    help=t("gen.resolucion_de", r=_resolucion(b["res"])))
 
-    st.iframe(b["html"], height=MAP_HEIGHT)
-    st.caption("Desplace el cursor sobre el mapa para leer el píxel y el promedio zonal del barrio. "
-               "Use el control temporal inferior para recorrer los días.")
+    _visor(gdf, b, "C3S", rutas, t("sat.ayuda_visor"))
     _bloque_extent(b["extent"])
 
-    section_title("Series diarias", "Promedio de las estadísticas zonales de todos los barrios.")
+    section_title(t("gen.series_diarias"), t("gen.promedio_zonal_todos"))
     c1, c2 = st.columns(2)
     with c1:
         st.markdown(f"**{s_rh.label}**")
         mostrar(serie_temporal(times, rh, s_rh, height=260, referencia=float(np.nanmean(rh))), key="c3s_rh")
     with c2:
         st.markdown(f"**{s_t.label}**")
-        mostrar(serie_temporal(times, t, s_t, height=260, referencia=float(np.nanmean(t))), key="c3s_t")
+        mostrar(serie_temporal(times, tx, s_t, height=260, referencia=float(np.nanmean(tx))), key="c3s_t")
 
-    section_title("Resumen por barrio", "Estadísticos del periodo calculados sobre la serie zonal diaria.")
+    section_title(t("sat.resumen"), t("sat.resumen_cap"))
+    c = {k: t(f"col.{k}") for k in ("pixeles", "hr_media", "hr_diaria", "tmax_media", "tmax_max", "tmax_diaria")}
     filas = []
     for s in b["stats"]:
         v_rh = np.array([np.nan if v is None else v for v in s["rh"]], float)
@@ -142,32 +198,24 @@ def _render_c3s(gdf, archivos):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             filas.append({
-                "Barrio": s["nom"], "Píxeles": s["n_pix"],
-                "HR media (%)": np.nanmean(v_rh), "HR diaria": s["rh"],
-                "Tmax media (°C)": np.nanmean(v_t), "Tmax máx. (°C)": np.nanmax(v_t), "Tmax diaria": s["t"],
+                t("gen.barrio"): s["nom"], c["pixeles"]: s["n_pix"],
+                c["hr_media"]: np.nanmean(v_rh), c["hr_diaria"]: s["rh"],
+                c["tmax_media"]: np.nanmean(v_t), c["tmax_max"]: np.nanmax(v_t), c["tmax_diaria"]: s["t"],
             })
-    df = pd.DataFrame(filas).sort_values("Tmax media (°C)", ascending=False)
-    st.dataframe(
-        df,
-        hide_index=True,
-        height=380,
-        column_config={
-            "Barrio": st.column_config.TextColumn(pinned=True),
-            "Píxeles": st.column_config.NumberColumn(format="%d", width="small"),
-            "HR media (%)": st.column_config.NumberColumn(format="%.1f"),
-            "HR diaria": st.column_config.LineChartColumn(),
-            "Tmax media (°C)": st.column_config.NumberColumn(format="%.1f"),
-            "Tmax máx. (°C)": st.column_config.NumberColumn(format="%.1f"),
-            "Tmax diaria": st.column_config.LineChartColumn(),
-        },
-    )
-    boton_descarga(df, "barrios_agera5_c3s", key="dl_c3s")
+    df = pd.DataFrame(filas).sort_values(c["tmax_media"], ascending=False)
+    _tabla_barrios(gdf, df, {
+        c["pixeles"]: st.column_config.NumberColumn(format="%d", width="small"),
+        c["hr_media"]: st.column_config.NumberColumn(format="%.1f"),
+        c["hr_diaria"]: st.column_config.LineChartColumn(),
+        c["tmax_media"]: st.column_config.NumberColumn(format="%.1f"),
+        c["tmax_max"]: st.column_config.NumberColumn(format="%.1f"),
+        c["tmax_diaria"]: st.column_config.LineChartColumn(),
+    }, "barrios_agera5_c3s", key="dl_c3s")
 
 
-def _render_precip(gdf, f_nc: Path, fuente: str):
-    titulo = FUENTES_META[fuente]["nombre"]
-    with st.spinner(f"Preparando visor {fuente}…"):
-        b = _bundle_precip(gdf, str(f_nc), f_nc.stat().st_mtime, titulo)
+def _render_precip(gdf, rutas: dict, fuente: str):
+    with st.spinner(t("sat.preparando", f=fuente)):
+        b = cargar(fuente, gdf, rutas)
 
     times = b["times"]
     p = _serie_area(b["stats"], "p")
@@ -177,52 +225,45 @@ def _render_precip(gdf, f_nc: Path, fuente: str):
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        metric_card("Acumulado del periodo", f"{np.nansum(p):,.1f} mm",
+        metric_card(t("sat.kpi_acum"), f"{np.nansum(p):,.1f} mm",
                     delta=f"{times[0]:%d/%m} – {times[-1]:%d/%m/%Y}", neutral_delta=True,
-                    chart=np.round(p, 2).tolist(), chart_type="bar",
-                    help="Suma de la precipitación diaria promedio de los barrios.")
+                    chart=np.round(p, 2).tolist(), chart_type="bar", help=t("sat.kpi_acum_ayuda"))
     with k2:
-        metric_card("Días con lluvia", f"{dias_lluvia} de {len(times)}",
-                    delta=f"{100 * dias_lluvia / len(times):.0f} % del periodo", neutral_delta=True,
-                    help="Días con promedio de barrios ≥ 1 mm.")
+        metric_card(t("sat.kpi_dias_lluvia"), t("gen.a_de_b", a=dias_lluvia, b=len(times)),
+                    delta=t("sat.kpi_dias_lluvia_delta", pct=f"{100 * dias_lluvia / len(times):.0f}"),
+                    neutral_delta=True, help=t("sat.kpi_dias_lluvia_ayuda"))
     with k3:
-        metric_card("Máximo diario", spec.fmt(p[i_max]), delta=f"{times[i_max]:%d/%m/%Y}", neutral_delta=True)
+        metric_card(t("sat.kpi_max_diario"), spec.fmt(p[i_max]), delta=f"{times[i_max]:%d/%m/%Y}",
+                    neutral_delta=True)
     with k4:
-        metric_card("Resolución espacial", _resolucion(b["res"]), delta="Grilla nativa", neutral_delta=True)
+        metric_card(t("gen.resolucion_espacial"), _resolucion(b["res"]), delta=t("sat.grilla_nativa"),
+                    neutral_delta=True)
 
-    st.iframe(b["html"], height=MAP_HEIGHT)
-    st.caption("Desplace el cursor sobre el mapa para leer el píxel y el promedio zonal del barrio. "
-               "Use el control temporal inferior para recorrer los días.")
+    _visor(gdf, b, fuente, rutas, t("sat.ayuda_visor"))
     _bloque_extent(b["extent"])
 
-    section_title("Precipitación diaria", "Promedio de las estadísticas zonales de todos los barrios.")
+    section_title(t("mapa.precip_diaria"), t("gen.promedio_zonal_todos"))
     mostrar(serie_temporal(times, p, spec, height=280), key=f"{fuente.lower()}_p")
 
-    section_title("Resumen por barrio", "Estadísticos del periodo calculados sobre la serie zonal diaria.")
+    section_title(t("sat.resumen"), t("sat.resumen_cap"))
+    c = {k: t(f"col.{k}") for k in ("pixeles", "acumulado", "max_diario", "dias_1mm", "precip_diaria")}
     filas = []
     for s in b["stats"]:
         v = np.array([np.nan if x is None else x for x in s["p"]], float)
         filas.append({
-            "Barrio": s["nom"], "Píxeles": s["n_pix"],
-            "Acumulado (mm)": np.nansum(v), "Máx. diario (mm)": np.nanmax(v) if np.isfinite(v).any() else np.nan,
-            "Días ≥ 1 mm": int(np.sum(v >= 1)), "Precipitación diaria": s["p"],
+            t("gen.barrio"): s["nom"], c["pixeles"]: s["n_pix"],
+            c["acumulado"]: np.nansum(v), c["max_diario"]: np.nanmax(v) if np.isfinite(v).any() else np.nan,
+            c["dias_1mm"]: int(np.sum(v >= 1)), c["precip_diaria"]: s["p"],
         })
-    df = pd.DataFrame(filas).sort_values("Acumulado (mm)", ascending=False)
-    st.dataframe(
-        df,
-        hide_index=True,
-        height=380,
-        column_config={
-            "Barrio": st.column_config.TextColumn(pinned=True),
-            "Píxeles": st.column_config.NumberColumn(format="%d", width="small"),
-            "Acumulado (mm)": st.column_config.ProgressColumn(
-                format="%.1f", min_value=0, max_value=float(df["Acumulado (mm)"].max() or 1)),
-            "Máx. diario (mm)": st.column_config.NumberColumn(format="%.1f"),
-            "Días ≥ 1 mm": st.column_config.NumberColumn(format="%d"),
-            "Precipitación diaria": st.column_config.BarChartColumn(y_min=0),
-        },
-    )
-    boton_descarga(df, f"barrios_{fuente.lower()}_precipitacion", key=f"dl_{fuente.lower()}")
+    df = pd.DataFrame(filas).sort_values(c["acumulado"], ascending=False)
+    _tabla_barrios(gdf, df, {
+        c["pixeles"]: st.column_config.NumberColumn(format="%d", width="small"),
+        c["acumulado"]: st.column_config.ProgressColumn(
+            format="%.1f", min_value=0, max_value=float(df[c["acumulado"]].max() or 1)),
+        c["max_diario"]: st.column_config.NumberColumn(format="%.1f"),
+        c["dias_1mm"]: st.column_config.NumberColumn(format="%d"),
+        c["precip_diaria"]: st.column_config.BarChartColumn(y_min=0),
+    }, f"barrios_{fuente.lower()}_precipitacion", key=f"dl_{fuente.lower()}")
 
 
 COMANDOS_DESCARGA = {
@@ -234,23 +275,16 @@ COMANDOS_DESCARGA = {
 
 def _faltante(fuente: str, archivos):
     """Estado vacío con la instrucción exacta para descargar la fuente."""
-    empty_state(f"{fuente}: aún no hay datos descargados",
-                "Ejecute la descarga desde la raíz del proyecto; el periodo se toma del archivo de CHIRPS.")
+    empty_state(t("sat.faltante", f=fuente), t("sat.faltante_cuerpo"))
     if COMANDOS_DESCARGA.get(fuente):
         st.code(COMANDOS_DESCARGA[fuente], language="bash")
     if archivos:
         _render_inventario(fuente, archivos)
 
 
-def _render_gee(gdf, archivos):
-    f_ndvi = next((f for f in archivos if "ndvi" in f.name.lower() and f.suffix == ".nc"), None)
-    f_ndwi = next((f for f in archivos if "ndwi" in f.name.lower() and f.suffix == ".nc"), None)
-    if not (f_ndvi and f_ndwi):
-        _faltante("GEE", archivos)
-        return
-
-    with st.spinner("Preparando visor GEE…"):
-        b = _bundle_gee(gdf, str(f_ndvi), str(f_ndwi), (f_ndvi.stat().st_mtime, f_ndwi.stat().st_mtime))
+def _render_gee(gdf, rutas: dict):
+    with st.spinner(t("sat.preparando", f="GEE")):
+        b = cargar("GEE", gdf, rutas)
 
     times, sin_nubes = b["times"], b["sin_nubes"]
     ndvi, ndwi = _serie_area(b["stats"], "ndvi"), _serie_area(b["stats"], "ndwi")
@@ -259,33 +293,32 @@ def _render_gee(gdf, archivos):
     ny, nx = b["forma"]
 
     def _rango(serie):
-        return f"{np.nanmin(serie):.2f} a {np.nanmax(serie):.2f}" if np.isfinite(serie).any() else "sin datos"
+        if not np.isfinite(serie).any():
+            return t("gen.sin_datos")
+        return t("gen.rango_a_b", a=f"{np.nanmin(serie):.2f}", b=f"{np.nanmax(serie):.2f}")
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        metric_card("NDVI medio", s_v.fmt(np.nanmean(ndvi)) if dias_validos else "—", delta=_rango(ndvi),
-                    delta_description="rango diario", neutral_delta=True,
+        metric_card(t("sat.kpi_ndvi"), s_v.fmt(np.nanmean(ndvi)) if dias_validos else "—", delta=_rango(ndvi),
+                    delta_description=t("gen.rango_diario"), neutral_delta=True,
                     chart=[round(float(v), 3) for v in ndvi if np.isfinite(v)], chart_type="line",
-                    help="Promedio de las series zonales de todos los barrios (días sin nubes).")
+                    help=t("sat.kpi_ndvi_ayuda"))
     with k2:
-        metric_card("NDWI medio", s_w.fmt(np.nanmean(ndwi)) if dias_validos else "—", delta=_rango(ndwi),
-                    delta_description="rango diario", neutral_delta=True,
+        metric_card(t("sat.kpi_ndwi"), s_w.fmt(np.nanmean(ndwi)) if dias_validos else "—", delta=_rango(ndwi),
+                    delta_description=t("gen.rango_diario"), neutral_delta=True,
                     chart=[round(float(v), 3) for v in ndwi if np.isfinite(v)], chart_type="line")
     with k3:
-        metric_card("Días con datos", f"{dias_validos} de {len(times)}",
-                    delta=f"{np.mean(sin_nubes):.0f} % de celdas sin nubes en promedio", neutral_delta=True,
-                    chart=np.round(sin_nubes, 0).tolist(), chart_type="bar",
-                    help="Un día cuenta si al menos un barrio tiene píxeles despejados.")
+        metric_card(t("sat.kpi_dias_datos"), t("gen.a_de_b", a=dias_validos, b=len(times)),
+                    delta=t("sat.kpi_despejadas", pct=f"{np.mean(sin_nubes):.0f}"), neutral_delta=True,
+                    chart=np.round(sin_nubes, 0).tolist(), chart_type="bar", help=t("sat.kpi_dias_datos_ayuda"))
     with k4:
-        metric_card("Resolución espacial", _resolucion(b["res"]), delta=f"Grilla {ny} × {nx} celdas",
+        metric_card(t("gen.resolucion_espacial"), _resolucion(b["res"]), delta=t("sat.kpi_grilla", ny=ny, nx=nx),
                     neutral_delta=True)
 
-    st.iframe(b["html"], height=MAP_HEIGHT)
-    st.caption("Las celdas vacías corresponden a nubes o sombras enmascaradas ese día. "
-               "Desplace el cursor para leer la celda y el promedio zonal del barrio.")
-    _bloque_extent(b["extent"], unidad="celdas 1 km")
+    _visor(gdf, b, "GEE", rutas, t("sat.ayuda_visor_gee"))
+    _bloque_extent(b["extent"], clave_unidad="sat.celdas1km_barrio")
 
-    section_title("Series diarias", "Promedio de las estadísticas zonales de todos los barrios; los huecos son días nublados.")
+    section_title(t("gen.series_diarias"), t("sat.series_gee_cap"))
     c1, c2, c3 = st.columns(3)
     for col, serie, spec, clave in ((c1, ndvi, s_v, "gee_ndvi"), (c2, ndwi, s_w, "gee_ndwi")):
         with col:
@@ -293,11 +326,13 @@ def _render_gee(gdf, archivos):
             ref = float(np.nanmean(serie)) if dias_validos else None
             mostrar(serie_temporal(times, serie, spec, height=240, referencia=ref), key=clave)
     with c3:
-        st.markdown("**Celdas sin nubes**")
-        spec_c = VarSpec("Celdas sin nubes", "%", "diaria", "Blues_09", "barra", 0)
+        spec_c = VarSpec("celdas_despejadas", "%", "diaria", "Blues_09", "barra", 0)
+        st.markdown(f"**{spec_c.label}**")
         mostrar(serie_temporal(times, sin_nubes, spec_c, height=240), key="gee_nubes")
 
-    section_title("Resumen por barrio", "Estadísticos del periodo sobre los días con píxeles despejados.")
+    section_title(t("sat.resumen"), t("sat.resumen_cap_gee"))
+    c = {k: t(f"col.{k}") for k in ("celdas_1km", "dias_validos", "ndvi_medio", "ndvi_diario", "ndwi_medio",
+                                    "ndwi_diario")}
     filas = []
     for s in b["stats"]:
         v = np.array([np.nan if x is None else x for x in s["ndvi"]], float)
@@ -305,37 +340,29 @@ def _render_gee(gdf, archivos):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             filas.append({
-                "Barrio": s["nom"], "Celdas 1 km": s["n_pix"], "Días válidos": int(np.isfinite(v).sum()),
+                t("gen.barrio"): s["nom"], c["celdas_1km"]: s["n_pix"], c["dias_validos"]: int(np.isfinite(v).sum()),
                 # Mini-gráficos solo con días despejados (no admiten huecos)
-                "NDVI medio": np.nanmean(v), "NDVI diario": [x for x in s["ndvi"] if x is not None],
-                "NDWI medio": np.nanmean(w), "NDWI diario": [x for x in s["ndwi"] if x is not None],
+                c["ndvi_medio"]: np.nanmean(v), c["ndvi_diario"]: [x for x in s["ndvi"] if x is not None],
+                c["ndwi_medio"]: np.nanmean(w), c["ndwi_diario"]: [x for x in s["ndwi"] if x is not None],
             })
-    df = pd.DataFrame(filas).sort_values("NDVI medio", ascending=False)
-    st.dataframe(
-        df,
-        hide_index=True,
-        height=380,
-        column_config={
-            "Barrio": st.column_config.TextColumn(pinned=True),
-            "Celdas 1 km": st.column_config.NumberColumn(format="%d", width="small"),
-            "Días válidos": st.column_config.ProgressColumn(format="%d", min_value=0, max_value=len(times)),
-            "NDVI medio": st.column_config.NumberColumn(format="%.3f"),
-            "NDVI diario": st.column_config.LineChartColumn(),
-            "NDWI medio": st.column_config.NumberColumn(format="%.3f"),
-            "NDWI diario": st.column_config.LineChartColumn(),
-        },
-    )
-    boton_descarga(df, "barrios_gee_ndvi_ndwi", key="dl_gee")
+    df = pd.DataFrame(filas).sort_values(c["ndvi_medio"], ascending=False)
+    _tabla_barrios(gdf, df, {
+        c["celdas_1km"]: st.column_config.NumberColumn(format="%d", width="small"),
+        c["dias_validos"]: st.column_config.ProgressColumn(format="%d", min_value=0, max_value=len(times)),
+        c["ndvi_medio"]: st.column_config.NumberColumn(format="%.3f"),
+        c["ndvi_diario"]: st.column_config.LineChartColumn(),
+        c["ndwi_medio"]: st.column_config.NumberColumn(format="%.3f"),
+        c["ndwi_diario"]: st.column_config.LineChartColumn(),
+    }, "barrios_gee_ndvi_ndwi", key="dl_gee")
 
 
 def _render_inventario(nombre, archivos):
     if not archivos:
-        empty_state(f"{nombre} sin archivos",
-                    "La carpeta existe pero aún no contiene NetCDF ni GeoTIFF para visualizar.")
+        empty_state(t("sat.sin_archivos", f=nombre), t("sat.sin_archivos_cuerpo"))
         return
+    tamano = t("col.tamano")
     data = pd.DataFrame([
-        {"Archivo": a.name, "Formato": a.suffix.lstrip(".").upper(), "Tamaño (MB)": a.stat().st_size / 2**20}
+        {t("col.archivo"): a.name, t("col.formato"): a.suffix.lstrip(".").upper(), tamano: a.stat().st_size / 2**20}
         for a in archivos
     ])
-    st.dataframe(data, hide_index=True,
-                 column_config={"Tamaño (MB)": st.column_config.NumberColumn(format="%.2f")})
+    st.dataframe(data, hide_index=True, column_config={tamano: st.column_config.NumberColumn(format="%.2f")})

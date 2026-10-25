@@ -3,6 +3,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from components.i18n import t
 from components.theme import COLORS
 
 _BADGE_TONES = {
@@ -126,6 +127,12 @@ def apply_custom_css():
     .gc-empty .gc-empty-title {{ font-weight: 600; color: {c["ink"]}; font-size: 15px; }}
     .gc-empty .gc-empty-body {{ color: {c["ink_2"]}; font-size: 13px; margin-top: 4px; }}
 
+    /* Selector de idioma: compacto, a la derecha y en mayúsculas (la URL conserva es/en) */
+    .st-key-lang {{ margin: 4px 0 2px 0; }}
+    .st-key-lang [data-testid="stButtonGroup"] {{ justify-content: flex-end; }}
+    .st-key-lang button {{ text-transform: uppercase; letter-spacing: .06em; font-size: 11.5px;
+        min-height: 0; padding: 2px 10px; }}
+
     /* Barra lateral */
     .gc-side-label {{
         font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
@@ -133,6 +140,13 @@ def apply_custom_css():
     }}
     .gc-side-grid {{ display: flex; flex-wrap: wrap; gap: 6px; }}
     .gc-side-meta {{ font-size: 12px; color: {c["ink_2"]}; line-height: 1.55; }}
+    .gc-side-list {{ font-size: 12px; border: 1px solid {c["grid"]}; border-radius: 8px; background: {c["surface"]};
+        padding: 4px 10px; }}
+    .gc-side-row {{ display: flex; justify-content: space-between; gap: 8px; padding: 4px 0;
+        border-bottom: 1px solid {c["surface_alt"]}; }}
+    .gc-side-row:last-child {{ border-bottom: 0; }}
+    .gc-side-row span:first-child {{ color: {c["ink"]}; font-weight: 500; }}
+    .gc-side-row span:last-child {{ color: {c["ink_2"]}; font-variant-numeric: tabular-nums; }}
     .gc-side-meta code {{ font-size: 11px; background: {c["surface_alt"]}; padding: 1px 5px; border-radius: 4px; }}
 
     /* Footer */
@@ -153,6 +167,41 @@ def apply_custom_css():
         font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
         color: {c["muted"]}; text-align: center;
     }}
+
+    /* Ranking de barrios (más altos / más bajos) */
+    .gc-rank {{ border: 1px solid {c["grid"]}; border-radius: 10px; background: {c["surface"]}; padding: 10px 12px; }}
+    .gc-rank-title {{ font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+        color: {c["muted"]}; margin-bottom: 6px; }}
+    .gc-rank-row {{ display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px;
+        padding: 4px 0; font-size: 12.5px; border-bottom: 1px solid {c["surface_alt"]}; }}
+    .gc-rank-row:last-child {{ border-bottom: 0; }}
+    .gc-rank-pos {{ color: {c["muted"]}; font-variant-numeric: tabular-nums; font-size: 11.5px; }}
+    .gc-rank-name {{ color: {c["ink"]}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+    .gc-rank-name small {{ display: block; color: {c["muted"]}; font-size: 10.5px; }}
+    .gc-rank-val {{ font-weight: 600; color: {c["ink"]}; font-variant-numeric: tabular-nums; text-align: right; }}
+    .gc-rank-bar {{ grid-column: 2 / 4; height: 4px; border-radius: 2px; background: {c["surface_alt"]};
+        margin-top: -2px; overflow: hidden; }}
+    .gc-rank-bar > div {{ height: 100%; border-radius: 2px; }}
+
+    /* Ficha del barrio elegido en un mapa */
+    .gc-pick {{ border: 1px solid {c["grid"]}; border-left: 3px solid {c["accent"]}; border-radius: 10px;
+        background: {c["surface"]}; padding: 10px 14px; }}
+    .gc-pick-name {{ font-size: 16px; font-weight: 700; color: {c["ink"]}; letter-spacing: -.01em; }}
+    .gc-pick-sub {{ font-size: 12px; color: {c["muted"]}; margin-bottom: 6px; }}
+    .gc-pick-val {{ font-size: 22px; font-weight: 700; color: {c["ink"]}; font-variant-numeric: tabular-nums; }}
+    .gc-pick-meta {{ font-size: 12px; color: {c["ink_2"]}; }}
+
+    /* Accesos a módulos (Panorama) */
+    [class*="st-key-gc_nav_"] {{
+        background: {c["surface"]}; transition: box-shadow .18s ease, transform .18s ease;
+    }}
+    [class*="st-key-gc_nav_"]:hover {{ box-shadow: 0 6px 18px rgba(11,11,11,0.07); transform: translateY(-1px); }}
+    .gc-nav-desc {{ font-size: 12.5px; color: {c["ink_2"]}; margin: -6px 0 0 0; line-height: 1.45; }}
+
+    /* Línea de tiempo de cobertura */
+    .gc-legend-inline {{ display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: {c["ink_2"]}; }}
+    .gc-legend-inline i {{ display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px;
+        vertical-align: -1px; }}
 
     /* ===================== Móvil (≤ 640 px): el escritorio no cambia ===================== */
     @media (max-width: 640px) {{
@@ -248,8 +297,12 @@ def metric_card(
     chart=None,
     chart_type: str = "line",
     help: str | None = None,
+    height: int | str = 156,
 ):
-    """Tarjeta KPI nativa con micro-gráfico opcional y contexto comparativo."""
+    """Tarjeta KPI nativa con micro-gráfico opcional y contexto comparativo.
+
+    height: 156 px por defecto (altura uniforme con o sin micro-gráfico); "content" para filas sin gráficos.
+    """
     st.metric(
         label,
         value,
@@ -261,7 +314,7 @@ def metric_card(
         chart_type=chart_type,
         border=True,
         help=help,
-        height=156,  # altura uniforme con o sin micro-gráfico
+        height=height,
     )
 
 
@@ -273,40 +326,84 @@ def tabla_resumen(filas: list[tuple[str, str]]):
     st.html(f'<div class="gc-grid-summary">{filas_html}</div>')
 
 
-def boton_descarga(df, nombre: str, key: str):
-    """Descarga CSV de una tabla (sin columnas de mini-gráficos). UTF-8 con BOM para Excel."""
+def boton_descarga(df, nombre: str, key: str, geojson: bytes | None = None):
+    """Descarga CSV de una tabla (sin columnas de mini-gráficos). UTF-8 con BOM para Excel.
+
+    Si se pasa `geojson`, añade al lado la descarga de la capa vectorial (para QGIS/ArcGIS).
+    """
     columnas = [c for c in df.columns
                 if c != "geometry" and not df[c].map(lambda v: isinstance(v, (list, tuple))).any()]
-    st.download_button(
-        "Descargar CSV",
-        df[columnas].to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"{nombre}.csv",
-        mime="text/csv",
-        icon=":material/download:",
-        type="tertiary",
-        key=key,
+    with st.container(horizontal=True, gap="small"):
+        st.download_button(
+            t("dl.csv"),
+            df[columnas].to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"{nombre}.csv",
+            mime="text/csv",
+            icon=":material/download:",
+            type="tertiary",
+            key=key,
+        )
+        if geojson is not None:
+            st.download_button(
+                t("dl.geojson"),
+                geojson,
+                file_name=f"{nombre}.geojson",
+                mime="application/geo+json",
+                icon=":material/map:",
+                type="tertiary",
+                key=f"{key}_geo",
+                help=t("dl.geojson_ayuda"),
+            )
+
+
+def lista_ranking(titulo: str, filas: list[dict], color: str):
+    """Lista compacta de barrios: puesto, nombre (y comuna), valor y barra proporcional (0–1)."""
+    html = []
+    for f in filas:
+        frac = max(0.02, min(1.0, float(f.get("frac", 0))))
+        sub = f'<small>{escape(f["sub"])}</small>' if f.get("sub") else ""
+        html.append(
+            f'<div class="gc-rank-row"><span class="gc-rank-pos">{f["puesto"]}</span>'
+            f'<span class="gc-rank-name" title="{escape(f["nombre"])}">{escape(f["nombre"])}{sub}</span>'
+            f'<span class="gc-rank-val">{escape(f["valor"])}</span>'
+            f'<div class="gc-rank-bar"><div style="width:{100 * frac:.0f}%;background:{color}"></div></div></div>'
+        )
+    st.html(f'<div class="gc-rank"><div class="gc-rank-title">{escape(titulo)}</div>{"".join(html)}</div>')
+
+
+def ficha_seleccion(nombre: str, sub: str, valor: str, meta: str):
+    """Tarjeta del barrio elegido en un mapa."""
+    st.html(
+        f'<div class="gc-pick"><div class="gc-pick-name">{escape(nombre)}</div>'
+        f'<div class="gc-pick-sub">{escape(sub)}</div><div class="gc-pick-val">{escape(valor)}</div>'
+        f'<div class="gc-pick-meta">{escape(meta)}</div></div>'
     )
+
+
+def pista(texto: str, icono: str = "touch_app"):
+    """Indicación breve de interacción (por ejemplo, «haga clic en un barrio»)."""
+    st.caption(f":material/{icono}: {texto}")
 
 
 def tarjetas_fuentes(tarjetas: list[dict]):
     """Rejilla de tarjetas resumen. Cada tarjeta: nombre, etiqueta, variables, filas [(k, v)], medidor (0-100)."""
     html = []
-    for t in tarjetas:
+    for tarjeta in tarjetas:
         filas = "".join(
-            f'<div class="gc-readout-row"><span>{escape(k)}</span><span>{escape(v)}</span></div>' for k, v in t["filas"]
+            f'<div class="gc-readout-row"><span>{escape(k)}</span><span>{escape(v)}</span></div>' for k, v in tarjeta["filas"]
         )
         medidor = ""
-        if t.get("medidor") is not None:
-            pct = max(0.0, min(100.0, float(t["medidor"])))
+        if tarjeta.get("medidor") is not None:
+            pct = max(0.0, min(100.0, float(tarjeta["medidor"])))
             medidor = (
-                f'<div class="gc-meter-label"><span>{escape(t.get("medidor_label", ""))}</span><b>{pct:.0f} %</b></div>'
+                f'<div class="gc-meter-label"><span>{escape(tarjeta.get("medidor_label", ""))}</span><b>{pct:.0f} %</b></div>'
                 f'<div class="gc-meter" role="meter" aria-valuenow="{pct:.0f}" aria-valuemin="0" aria-valuemax="100">'
                 f'<div style="width:{pct:.1f}%"></div></div>'
             )
-        etiqueta = badge_html(t["etiqueta"], t.get("tono", "blue")) if t.get("etiqueta") else ""
+        etiqueta = badge_html(tarjeta["etiqueta"], tarjeta.get("tono", "blue")) if tarjeta.get("etiqueta") else ""
         html.append(
-            f'<div class="gc-card"><div class="gc-card-top"><span class="gc-card-name">{escape(t["nombre"])}</span>'
-            f'{etiqueta}</div><div class="gc-card-vars">{escape(t.get("variables", ""))}</div>{filas}{medidor}</div>'
+            f'<div class="gc-card"><div class="gc-card-top"><span class="gc-card-name">{escape(tarjeta["nombre"])}</span>'
+            f'{etiqueta}</div><div class="gc-card-vars">{escape(tarjeta.get("variables", ""))}</div>{filas}{medidor}</div>'
         )
     st.html(f'<div class="gc-cards">{"".join(html)}</div>')
 
@@ -330,17 +427,17 @@ def render_footer(aliados_png: Path | None = None):
     """Pie de página con la franja institucional del proyecto, si existe el PNG de aliados."""
     if aliados_png and aliados_png.exists():
         with st.container(border=True, key="gc_aliados", horizontal_alignment="center", gap="small"):
-            st.html('<div class="gc-aliados-label">Proyecto Dengue.IA Cali · Alianza institucional</div>')
+            st.html(f'<div class="gc-aliados-label">{escape(t("pie.aliados"))}</div>')
             st.image(
                 str(aliados_png),
                 width=900,
                 caption=None,
             )
     st.html(
-        """
+        f"""
         <div class="gc-footer">
-            <span>GeoClima Cali · Análisis espaciotemporal hidrometeorológico</span>
-            <span>Santiago de Cali, Colombia</span>
+            <span>{escape(t("pie.app"))}</span>
+            <span>{escape(t("pie.lugar"))}</span>
         </div>
         """
     )

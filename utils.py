@@ -10,9 +10,10 @@ import shapely
 import streamlit as st
 import xarray as xr
 from branca.element import Element, MacroElement
-from folium.plugins import TimestampedGeoJson
+from folium.plugins import Fullscreen, TimestampedGeoJson
 from jinja2 import Template
 
+from components.i18n import locale_js, t, t_comuna
 from components.theme import (
     COLORS,
     FONT_STACK,
@@ -20,8 +21,10 @@ from components.theme import (
     RASTER_VARS,
     BARRIO_LINE,
     RASTER_OPACITY,
+    SAT_URL,
     TILES_ATTR,
     TILES_URL,
+    VarSpec,
     colormap,
     escala_robusta,
     leyenda_html,
@@ -122,12 +125,42 @@ def cargar_grilla_nc(nc_path: Path, var: str | None = None):
 # =========================================================================
 # Estadísticas zonales (promedio de píxeles que intersectan cada barrio)
 # =========================================================================
+def comuna_de(codigo) -> str:
+    """Comuna a partir del código de barrio de Planeación Municipal (CCBB): 01–22 o 81 (área de expansión)."""
+    cc = str(codigo)[:2]
+    if cc == "81":
+        return "Área de expansión"
+    return f"Comuna {int(cc)}" if cc.isdigit() and 1 <= int(cc) <= 22 else "Sin comuna"
+
+
 def preparar_barrios(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     gdf_b = gdf.copy()
     col_nombre = next((c for c in gdf_b.columns if c.lower() == "nombre"), gdf_b.columns[0])
     gdf_b["b_id"] = np.arange(len(gdf_b))
     gdf_b["nombre_barrio"] = gdf_b[col_nombre].astype(str)
+    gdf_b["comuna"] = gdf_b["id_sector"].map(comuna_de) if "id_sector" in gdf_b else "Sin comuna"
     return gdf_b
+
+
+def barrio_en_clic(gdf_b, valor_mapa) -> str | None:
+    """Barrio que contiene el punto clicado en un mapa de st_folium (`last_clicked`), o None.
+
+    Se usa la coordenada y no el elemento SVG: un clic sobre el límite entre dos barrios puede
+    caer en el grupo SVG y Leaflet lo reporta como clic en el mapa base, no en el barrio.
+    """
+    punto = (valor_mapa or {}).get("last_clicked")
+    if not punto:
+        return None
+    dentro = gdf_b.geometry.contains(shapely.Point(punto["lng"], punto["lat"]))
+    return gdf_b.loc[dentro, "nombre_barrio"].iat[0] if dentro.any() else None
+
+
+def orden_comunas(comunas) -> list[str]:
+    """Comuna 1 … Comuna 22 en orden numérico y el área de expansión al final."""
+    def clave(c):
+        partes = c.split()
+        return (0, int(partes[-1])) if partes[-1].isdigit() else (1, c)
+    return sorted(set(comunas), key=clave)
 
 
 def _pixeles_por_barrio(gdf_b, lats, lons, pad):
@@ -183,6 +216,8 @@ MAP_CSS = f"""
   html, body, .leaflet-container {{ font-family: {FONT_STACK}; background: {COLORS["page"]}; }}
   .leaflet-container {{ border-radius: 12px; }}
   .leaflet-control-attribution {{ font-size: 10px; background: rgba(252,252,251,.8) !important; }}
+  .leaflet-control-scale-line {{ font-size: 10px; line-height: 1.3; padding: 0 4px; color: {COLORS["ink_2"]};
+      background: rgba(252,252,251,.8); border-color: {COLORS["ink_2"]}; }}
   .leaflet-bar, .leaflet-control-layers {{
       border: 1px solid {COLORS["grid"]} !important; border-radius: 8px !important;
       box-shadow: 0 2px 8px rgba(11,11,11,.06) !important;
@@ -257,8 +292,8 @@ class _ScriptMapa(MacroElement):
         self.js = js
 
 
-def mapa_base(gdf, height: int | str = "100%", controles: bool = True) -> folium.Map:
-    """Mapa con fondo y cámara idénticos en toda la aplicación."""
+def mapa_base(gdf, height: int | str = "100%", controles: bool = True, lang: str | None = None) -> folium.Map:
+    """Mapa con fondo y cámara idénticos en toda la aplicación (textos de controles en `lang`)."""
     minx, miny, maxx, maxy = [float(v) for v in gdf.total_bounds]
     margen = 0.35
     m = folium.Map(
@@ -279,18 +314,49 @@ def mapa_base(gdf, height: int | str = "100%", controles: bool = True) -> folium
         control_scale=controles,
         zoom_control=controles,
     )
-    folium.TileLayer(TILES_URL, attr=TILES_ATTR, name="OpenStreetMap", control=False,
+    # Mapas base alternables desde el control de capas (OSM por defecto)
+    folium.TileLayer(TILES_URL, attr=TILES_ATTR, name=t("mapa.calles", lang),
                      max_native_zoom=19, max_zoom=19).add_to(m)
+    folium.TileLayer(SAT_URL, attr=t("mapa.sat_attr", lang), name=t("mapa.satelite", lang), show=False,
+                     max_native_zoom=18, max_zoom=19).add_to(m)
+    if controles:
+        Fullscreen(position="topleft", title=t("mapa.pantalla_completa", lang),
+                   title_cancel=t("mapa.salir_pantalla", lang)).add_to(m)
     m.get_root().header.add_child(Element(MAP_CSS))
     return m
 
 
-def capa_barrios(gdf_b, con_pixeles: bool = True, alias_pixeles: str = "Píxeles") -> folium.GeoJson:
-    campos = ["nombre_barrio", "n_pixeles"] if con_pixeles else ["nombre_barrio"]
-    alias = ["Barrio", alias_pixeles] if con_pixeles else ["Barrio"]
+@st.cache_data(show_spinner=False)
+def _comunas_geojson(_gdf_b, n: int) -> str:
+    comunas = _gdf_b[["comuna", "geometry"]].dissolve("comuna").reset_index()
+    comunas["geometry"] = comunas.geometry.simplify(0.00005)
+    return comunas.to_json()
+
+
+def capa_comunas(gdf_b, show: bool = False, lang: str | None = None) -> folium.GeoJson:
+    """Límites de comuna (disolución de barrios), sin interacción para no tapar el hover de los barrios."""
     return folium.GeoJson(
-        gdf_b[["b_id"] + campos + ["geometry"]],
-        name="Límites Cali",
+        _comunas_geojson(gdf_b, len(gdf_b)), name=t("mapa.limites_comuna", lang), show=show, interactive=False,
+        style_function=lambda f: {"fillOpacity": 0, "color": COLORS["ink"], "weight": 1.8, "opacity": 0.85},
+    )
+
+
+def control_capas(m: folium.Map) -> folium.Map:
+    """Control de mapas base y capas. Se agrega al final: su JS referencia capas ya creadas."""
+    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+    return m
+
+
+def capa_barrios(gdf_b, con_pixeles: bool = True, alias_pixeles: str | None = None,
+                 lang: str | None = None) -> folium.GeoJson:
+    campos = ["nombre_barrio", "comuna", "n_pixeles"] if con_pixeles else ["nombre_barrio", "comuna"]
+    alias = [t("gen.barrio", lang), t("gen.comuna", lang)]
+    if con_pixeles:
+        alias.append(alias_pixeles or t("mapa.pixeles", lang))
+    datos = gdf_b[["b_id"] + campos + ["geometry"]].assign(comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)))
+    return folium.GeoJson(
+        datos,
+        name=t("mapa.limites_barrio", lang),
         show=True,
         style_function=lambda x: {
             "fillColor": COLORS["ink"],
@@ -318,8 +384,8 @@ def _periodo(time_vals):
 
 def _features_pixeles(arr, lats, lons, pad, time_vals, cm, opacidad):
     feats = []
-    for t_idx, t in enumerate(time_vals):
-        iso = t.isoformat()
+    for t_idx, fecha in enumerate(time_vals):
+        iso = fecha.isoformat()
         for i, lat in enumerate(lats):
             for j, lon in enumerate(lons):
                 v = float(arr[t_idx, i, j])
@@ -371,7 +437,7 @@ GC.tIdx = function() {
     var td = GC.map.timeDimension;
     return td ? Math.max(0, td.getCurrentTimeIndex()) : 0;
 };
-GC.fmt = function(v, u) { return (v !== null && v !== undefined) ? v.toLocaleString('es-CO') + ' ' + u : '—'; };
+GC.fmt = function(v, u) { return (v !== null && v !== undefined) ? v.toLocaleString(GC.locale) + ' ' + u : '—'; };
 GC.pixel = function(ll) {
     var g = GC.grid, el = document.getElementById('gc-pix');
     if (!el) return;
@@ -406,32 +472,30 @@ if (GC.map.timeDimension) {
 }
 """
 
-_HTML_LECTURA = """
-<div class="gc-readout">
-    <div class="gc-readout-row"><span>Píxel bajo el cursor</span><span id="gc-pix" class="gc-readout-big">—</span></div>
-    <div class="gc-readout-row"><span>Barrio</span><span id="gc-bnom">—</span></div>
-    <div class="gc-readout-row"><span>Píxeles intersectados</span><span id="gc-bpix">—</span></div>
-    <div class="gc-readout-row"><span>Promedio zonal</span><span id="gc-bval">—</span></div>
-</div>
-"""
+def _html_lectura(lang: str | None = None) -> str:
+    filas = [("gc-pix", "mapa.lectura_pixel", ' class="gc-readout-big"'), ("gc-bnom", "gen.barrio", ""),
+             ("gc-bpix", "mapa.lectura_pix_int", ""), ("gc-bval", "mapa.lectura_zonal", "")]
+    return '<div class="gc-readout">' + "".join(
+        f'<div class="gc-readout-row"><span>{t(k, lang)}</span><span id="{i}"{c}>—</span></div>' for i, k, c in filas
+    ) + "</div>"
 
 
-def _datos_js(m, capa, grid, barrios, units, var_inicial):
+def _datos_js(m, capa, grid, barrios, units, var_inicial, lang):
     return (
         "window.GC = {"
         f"map: {m.get_name()}, capaBarrios: {capa.get_name()},"
         f"grid: {json.dumps(grid)}, barrios: {json.dumps(barrios)}, units: {json.dumps(units)},"
-        f"var: '{var_inicial}', activo: null, ultimo: null"
+        f"var: '{var_inicial}', activo: null, ultimo: null, locale: '{locale_js(lang)}'"
         "};\n"
     )
 
 
-def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons, pad):
+def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons, pad, lang: str | None = None):
     """Visor temporal con dos variables alternables.
 
     capas: [(clave, arreglo T×Ny×Nx, VarSpec, etiqueta corta), (…)]. La primera se muestra al abrir.
     """
-    m = mapa_base(gdf_b)
+    m = mapa_base(gdf_b, lang=lang)
     period, fmt = _periodo(time_vals)
     prep = []
     for clave, arr, spec, etiqueta in capas:
@@ -442,8 +506,9 @@ def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons
     (k0, _, _, _, _, fc0), (k1, _, _, _, _, fc1) = prep
     tg0 = _timestamped(fc0, period, fmt)
     tg0.add_to(m)
-    capa = capa_barrios(gdf_b).add_to(m)
-    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+    capa_comunas(gdf_b, lang=lang).add_to(m)
+    capa = capa_barrios(gdf_b, lang=lang).add_to(m)
+    control_capas(m)
 
     grid = {"lats": [float(x) for x in lats], "lons": [float(x) for x in lons], "pad": float(pad),
             **{c: _grilla_js(a, sp.decimales) for c, a, sp, *_ in prep}}
@@ -454,7 +519,7 @@ def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons
     )
     leyendas = "".join(
         f'<div id="gc-leg-{c}" style="display:{"block" if n == 0 else "none"}">'
-        f'{leyenda_html(cm, sp, opacidad=RASTER_OPACITY)}</div>'
+        f'{leyenda_html(cm, sp, opacidad=RASTER_OPACITY, lang=lang)}</div>'
         for n, (c, _, sp, _, cm, _) in enumerate(prep)
     )
     m.get_root().html.add_child(Element(f"""
@@ -462,14 +527,14 @@ def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons
         <summary class="gc-panel-title">{titulo}</summary>
         <div class="gc-seg">
             {radios}
-            <label><input type="radio" name="gc-var" value="none" onchange="GC.cambiar('none')">Ocultar</label>
+            <label><input type="radio" name="gc-var" value="none" onchange="GC.cambiar('none')">{t("mapa.ocultar", lang)}</label>
         </div>
         {leyendas}
-        {_HTML_LECTURA}
+        {_html_lectura(lang)}
     </details>
     """))
 
-    js = _datos_js(m, capa, grid, barrios_stats, {c: sp.unidad for c, _, sp, *_ in prep}, k0)
+    js = _datos_js(m, capa, grid, barrios_stats, {c: sp.unidad for c, _, sp, *_ in prep}, k0, lang)
     js += f"""
     window.GC.capas = {{
         {k0}: {tg0.get_name()},
@@ -496,14 +561,16 @@ def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons
     return m
 
 
-def generar_mapa_interactivo(gdf_b, da_rh, da_t, barrios_stats, time_vals, lats, lons, pad):
-    capas = [("rh", da_rh.values, RASTER_VARS["rh"], "Humedad"), ("t", da_t.values, RASTER_VARS["t"], "Temp. máx.")]
-    return generar_mapa_dual(gdf_b, capas, "C3S · AgERA5", barrios_stats, time_vals, lats, lons, pad)
+def generar_mapa_interactivo(gdf_b, arr_rh, arr_t, barrios_stats, time_vals, lats, lons, pad, lang: str | None = None):
+    capas = [("rh", arr_rh, RASTER_VARS["rh"], t("var_corta.hr", lang)),
+             ("t", arr_t, RASTER_VARS["t"], t("var_corta.tmax_mapa", lang))]
+    return generar_mapa_dual(gdf_b, capas, "C3S · AgERA5", barrios_stats, time_vals, lats, lons, pad, lang=lang)
 
 
-def generar_mapa_simple(gdf_b, arr, clave, titulo, leyenda, barrios_stats, time_vals, lats, lons, pad):
+def generar_mapa_simple(gdf_b, arr, clave, titulo, leyenda, barrios_stats, time_vals, lats, lons, pad,
+                        lang: str | None = None):
     """Visor temporal de una sola variable (precipitación CHIRPS / MSWEP)."""
-    m = mapa_base(gdf_b)
+    m = mapa_base(gdf_b, lang=lang)
     spec = RASTER_VARS[clave]
     arr = np.asarray(arr, float)
     cm = colormap(spec.cmap, *escala_robusta(arr, desde_cero=spec.forma == "barra"))
@@ -511,8 +578,9 @@ def generar_mapa_simple(gdf_b, arr, clave, titulo, leyenda, barrios_stats, time_
 
     fc = _features_pixeles(arr, lats, lons, pad, time_vals, cm, RASTER_OPACITY)
     _timestamped(fc, period, fmt).add_to(m)
-    capa = capa_barrios(gdf_b).add_to(m)
-    folium.LayerControl(position="topright", collapsed=True).add_to(m)
+    capa_comunas(gdf_b, lang=lang).add_to(m)
+    capa = capa_barrios(gdf_b, lang=lang).add_to(m)
+    control_capas(m)
 
     grid = {"lats": [float(x) for x in lats], "lons": [float(x) for x in lons], "pad": float(pad),
             clave: _grilla_js(arr, spec.decimales)}
@@ -520,20 +588,122 @@ def generar_mapa_simple(gdf_b, arr, clave, titulo, leyenda, barrios_stats, time_
     m.get_root().html.add_child(Element(f"""
     <details class="gc-panel" open>
         <summary class="gc-panel-title">{titulo}</summary>
-        {leyenda_html(cm, spec, leyenda, opacidad=RASTER_OPACITY)}
-        {_HTML_LECTURA}
+        {leyenda_html(cm, spec, leyenda, opacidad=RASTER_OPACITY, lang=lang)}
+        {_html_lectura(lang)}
     </details>
     """))
-    js = _datos_js(m, capa, grid, barrios_stats, {clave: spec.unidad}, clave) + _JS_LECTURA
+    js = _datos_js(m, capa, grid, barrios_stats, {clave: spec.unidad}, clave, lang) + _JS_LECTURA
     _ScriptMapa(js).add_to(m)
     return m
 
 
 # =========================================================================
+# Coropleta: un valor por barrio (agregado del periodo)
+# =========================================================================
+COROPLETA_OPACITY = 0.72
+SIN_DATO = "#d9d8d2"
+
+
+def puestos(valores) -> np.ndarray:
+    """Puesto de cada barrio de mayor a menor (1 = valor más alto); 0 si no tiene dato."""
+    v = pd.Series(np.asarray(valores, float))
+    return v.rank(ascending=False, method="min").fillna(0).astype(int).to_numpy()
+
+
+def mapa_coropleta(gdf_b, valores, spec: VarSpec, titulo: str, *, etiqueta: str, fmt_valor,
+                   seleccion: int | None = None, foco=None, pista: str | None = None,
+                   height: int | str = "100%", lang: str | None = None):
+    """Barrios coloreados por un valor del periodo, con puesto en el tooltip y leyenda del colormap real.
+
+    fmt_valor: función valor → texto (incluye unidad). seleccion: b_id del barrio a resaltar.
+    foco: máscara booleana; los barrios fuera de ella se atenúan y la cámara se ajusta a los de dentro.
+    """
+    vals = np.asarray(valores, float)
+    cm = colormap(spec.cmap, *escala_robusta(vals))
+    n_validos = int(np.isfinite(vals).sum())
+    pos = puestos(vals)
+    foco = np.ones(len(vals), bool) if foco is None else np.asarray(foco, bool)
+    datos = gdf_b[["b_id", "nombre_barrio", "comuna", "geometry"]].assign(
+        comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)),
+        valor=[fmt_valor(v) if np.isfinite(v) else t("mapa.sin_dato", lang) for v in vals],
+        puesto=[t("gen.a_de_b", lang, a=p, b=n_validos) if p else "—" for p in pos],
+        relleno=[cm.rgb_hex_str(v) if np.isfinite(v) else SIN_DATO for v in vals],
+        opacidad=np.where(foco, COROPLETA_OPACITY, 0.16),
+    )
+
+    m = mapa_base(gdf_b, height=height, lang=lang)
+    if not foco.all():
+        minx, miny, maxx, maxy = gdf_b.loc[foco].total_bounds
+        m.fit_bounds([[miny - 0.004, minx - 0.004], [maxy + 0.004, maxx + 0.004]])
+    folium.GeoJson(
+        datos,
+        name=etiqueta,
+        style_function=lambda f: {"fillColor": f["properties"]["relleno"], "fillOpacity": f["properties"]["opacidad"],
+                                  "color": "#ffffff", "weight": 0.7, "opacity": 0.9},
+        highlight_function=lambda f: {"weight": 2.4, "color": COLORS["ink"], "fillOpacity": 0.85},
+        tooltip=folium.GeoJsonTooltip(fields=["nombre_barrio", "comuna", "valor", "puesto"],
+                                      aliases=[t("gen.barrio", lang), t("gen.comuna", lang), etiqueta,
+                                               t("mapa.puesto", lang)], sticky=True,
+                                      class_name="gc-tooltip"),
+    ).add_to(m)
+    capa_comunas(gdf_b, show=True, lang=lang).add_to(m)
+    if not foco.all():
+        borde = gpd.GeoDataFrame(geometry=[gdf_b.loc[foco].geometry.union_all()], crs=gdf_b.crs)
+        folium.GeoJson(borde, name=t("mapa.ambito", lang), interactive=False, control=False,
+                       style_function=lambda f: {"fillOpacity": 0, "color": COLORS["ink"], "weight": 2.2,
+                                                 "opacity": 0.9}).add_to(m)
+    if seleccion is not None:
+        folium.GeoJson(
+            gdf_b.iloc[[seleccion]][["nombre_barrio", "geometry"]], name=t("mapa.barrio_sel", lang),
+            style_function=lambda f: {"fillOpacity": 0, "color": COLORS["ink"], "weight": 3, "opacity": 1},
+            interactive=False,
+        ).add_to(m)
+
+    control_capas(m)
+    pista_html = f'<div class="gc-legend-note" style="margin-top:8px">{pista}</div>' if pista else ""
+    m.get_root().html.add_child(Element(f"""
+    <details class="gc-panel" open>
+        <summary class="gc-panel-title">{titulo}</summary>
+        {leyenda_html(cm, spec, etiqueta, opacidad=COROPLETA_OPACITY, nota=t("mapa.nota_escala_barrios", lang),
+                      lang=lang)}
+        {pista_html}
+    </details>
+    """))
+    # En móvil el panel arranca plegado para no tapar el mapa
+    _ScriptMapa("""
+    if (window.innerWidth <= 640) {
+        var panel = document.querySelector('.gc-panel');
+        if (panel) panel.removeAttribute('open');
+    }""").add_to(m)
+    return m
+
+
+def geojson_barrios(gdf_b, tabla: pd.DataFrame, columna_nombre: str) -> bytes:
+    """GeoJSON (EPSG:4326) con la geometría de cada barrio y las columnas numéricas/texto de la tabla.
+
+    columna_nombre: columna de la tabla con el nombre del barrio (su encabezado depende del idioma).
+    """
+    cols = [c for c in tabla.columns
+            if not tabla[c].map(lambda v: isinstance(v, (list, tuple, np.ndarray))).any()]
+    geo = gdf_b[["nombre_barrio", "geometry"]].merge(
+        tabla[cols], left_on="nombre_barrio", right_on=columna_nombre, how="right"
+    )
+    geo = gpd.GeoDataFrame(geo.drop(columns="nombre_barrio"), geometry="geometry", crs="EPSG:4326")
+    geo["geometry"] = geo.geometry.set_precision(1e-6)  # ~0.1 m: archivos más livianos sin perder forma
+    return geo.to_json(drop_id=True, na="null").encode("utf-8")
+
+
+# =========================================================================
 # Estaciones in situ
 # =========================================================================
-@st.cache_data(show_spinner="Procesando registros de estaciones…")
 def cargar_y_procesar_estaciones(csv_path: Path):
+    """Registros semanales por estación e información de cada estación (con aviso traducido mientras procesa)."""
+    with st.spinner(t("gen.procesando_estaciones")):
+        return _estaciones_semanales(csv_path)
+
+
+@st.cache_data(show_spinner=False)
+def _estaciones_semanales(csv_path: Path):
     cols = [
         "Estacion",
         "Fecha",
@@ -572,10 +742,11 @@ def cargar_y_procesar_estaciones(csv_path: Path):
     # es decir, la que contiene el primer miércoles del año.
     miercoles = df_semanal["Fecha"] - pd.Timedelta(days=3)
     df_semanal["Año epi"] = miercoles.dt.year
-    df_semanal["Semana epi"] = (miercoles.dt.dayofyear - 1) // 7 + 1
+    df_semanal["Semana epi"] = (miercoles.dt.day_of_year - 1) // 7 + 1
 
+    # Primero se descartan filas sin coordenadas: algunas estaciones (Compartir) empiezan sin ellas
     estaciones_info = (
-        df[["Estacion", "Latitud", "Longitud"]].drop_duplicates("Estacion").dropna()
+        df[["Estacion", "Latitud", "Longitud"]].dropna().drop_duplicates("Estacion")
     )
 
     return df_semanal, estaciones_info

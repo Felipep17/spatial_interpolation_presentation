@@ -2,17 +2,21 @@
 
 Plataforma web (Streamlit) de análisis espaciotemporal y monitoreo hidrometeorológico de **Santiago de Cali**, desarrollada en el marco del proyecto **Dengue.IA Cali**.
 
-Integra tres fuentes de información sobre la capa de barrios de la ciudad:
+Integra productos raster (reanálisis y satélite) y estaciones in situ sobre la capa de 357 barrios y 22 comunas de la ciudad:
 
 | Módulo | Fuente | Qué muestra |
 |---|---|---|
-| **Panorama** (inicio) | Todas | Indicadores generales, tarjetas por fuente, cuánto distingue cada fuente entre barrios y comparación CHIRPS–MSWEP |
-| **Perfil de barrio** | Todas | Buscador de barrios: mapa con sus celdas de 1 km, indicadores frente al promedio de Cali, series diarias y estaciones cercanas (enlace compartible `?barrio=`) |
-| **Fuentes satelitales** | Copernicus C3S · AgERA5 (0.1°) | Humedad relativa y temperatura máxima diarias, visor temporal y estadísticas zonales por barrio |
-| | CHIRPS v3.0 (0.05°) | Precipitación diaria, visor temporal y acumulados por barrio |
-| | MSWEP (0.1°) | Precipitación diaria multi-fuente, mismo visor que CHIRPS |
-| | Google Earth Engine · MODIS (1 km) | NDVI y NDWI diarios sin nubes, visor temporal y estadísticas por barrio |
-| **Estaciones in situ** | Red de estaciones meteorológicas (CSV) | Series agregadas por **semana epidemiológica (INS/CDC, domingo a sábado)**, mapa de la red, completitud y **grilla de 1 km** activable |
+| **Panorama** (inicio) | Todas | **Mapa de barrios** (coropleta del periodo con 6 indicadores, filtro por comuna, ficha al hacer clic y ranking), promedio por comuna, cobertura temporal de las fuentes, cuánto distingue cada fuente entre barrios y comparación CHIRPS–MSWEP |
+| **Perfil de barrio** | Todas | Barrio con su comuna, celdas de 1 km, **vecinos** y estaciones cercanas; indicadores con **puesto entre 357 barrios**, gráfico de **posición frente a los demás barrios**, series diarias y **comparación con hasta 2 barrios** (clic en el mapa para cambiar de barrio) |
+| **Fuentes satelitales** | Copernicus C3S · AgERA5 (0.1°) | Humedad relativa y temperatura máxima diarias: **visor diario por píxel** o **mapa del periodo por barrio** |
+| | CHIRPS v3.0 (0.05°) | Precipitación diaria, mismas dos vistas y acumulados por barrio |
+| | MSWEP (0.1°) | Precipitación diaria multi-fuente, mismas dos vistas |
+| | Google Earth Engine · MODIS (1 km) | NDVI y NDWI diarios sin nubes, mismas dos vistas |
+| **Estaciones in situ** | Red de estaciones meteorológicas (CSV) | Series por **semana epidemiológica (INS/CDC, domingo a sábado)**, barrio y comuna de cada estación, **ciclo anual** (rango habitual p10–p90 y un año elegido), **calendario año × semana**, completitud y **grilla de 1 km** activable |
+
+En todos los mapas: mapa base de **calles (OSM) o satélite (Esri)**, **límites de comuna** activables, **pantalla completa** y búsqueda de barrio desde la barra lateral.
+
+**Idiomas:** español e inglés, con el selector **ES / EN** de la barra lateral (`?lang=en` en la URL).
 
 ---
 
@@ -109,11 +113,21 @@ Abre **http://localhost:8501** en el navegador.
 | Página | URL |
 |---|---|
 | Panorama (por defecto) | `http://localhost:8501/` |
-| Fuentes satelitales | `http://localhost:8501/satelital` |
-| Estaciones in situ | `http://localhost:8501/estaciones` |
-| Perfil de barrio | `http://localhost:8501/barrio?barrio=Nueva%20Floresta` |
+| Fuentes satelitales | `http://localhost:8501/satelital?fuente=MODIS&vista=Mapa+por+barrio` |
+| Estaciones in situ | `http://localhost:8501/estaciones?variable=Precipitación&estacion=MELENDEZ` |
+| Perfil de barrio | `http://localhost:8501/barrio?barrio=Nueva+Floresta&comparar=Belalcázar` |
 
-Todas las tablas por barrio y por estación tienen un botón **Descargar CSV** (UTF-8, compatible con Excel). La interfaz se adapta a móviles (≤ 640 px) sin cambiar la versión de escritorio.
+**Enlaces compartibles.** Las selecciones principales viven en la URL, así que basta copiar la dirección del navegador:
+
+| Parámetro | Página | Valores |
+|---|---|---|
+| `fuente` | Fuentes satelitales | `AgERA5`, `CHIRPS`, `MSWEP`, `MODIS` |
+| `vista` | Fuentes satelitales | `Visor diario`, `Mapa por barrio` |
+| `variable`, `estacion` | Estaciones | Etiqueta de la variable (`Precipitación`, `T. máxima`…) y nombre de la estación |
+| `barrio`, `comparar` | Perfil de barrio | Nombre del barrio; `comparar` se repite hasta 2 veces |
+| `lang` | Todas | `es` (por defecto) o `en`. Las etiquetas de `vista` y `variable` van en el idioma del enlace (`Map by neighborhood`, `Max. temp.`) |
+
+**Descargas.** Todas las tablas tienen **CSV** (UTF-8, compatible con Excel); las tablas por barrio y el perfil también ofrecen **GeoJSON** (polígonos EPSG:4326 con los valores, listo para QGIS/ArcGIS), y cada visor diario se puede bajar como **HTML** interactivo que se abre sin la app. La interfaz se adapta a móviles (≤ 640 px) sin cambiar la versión de escritorio.
 
 Opciones útiles:
 
@@ -244,14 +258,18 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 ├── datos.py                # Procesamiento cacheado de cada fuente, compartido por las páginas
 ├── descargas/              # Scripts de descarga: GEE (NDVI/NDWI 1 km) y MSWEP; grilla de 1 km común
 ├── views/
-│   ├── panorama.py         # Inicio · resumen de todas las fuentes
+│   ├── panorama.py         # Inicio · mapa de barrios, comunas y resumen de todas las fuentes
+│   ├── explorador.py       # Coropleta + ficha + ranking (compartido por Panorama y Fuentes)
 │   ├── satelital.py        # Módulo 01 · Fuentes satelitales (AgERA5, CHIRPS, MSWEP, GEE)
-│   ├── estaciones.py       # Módulo 02 · Estaciones in situ y grilla de 1 km
-│   └── barrio.py           # Módulo 03 · Perfil de barrio
+│   ├── estaciones.py       # Módulo 02 · Estaciones in situ, ciclo anual y grilla de 1 km
+│   └── barrio.py           # Módulo 03 · Perfil de barrio y comparación
 ├── components/
 │   ├── theme.py            # Tokens de diseño: colores, variables, paletas, leyendas, plantilla Plotly
-│   ├── ui.py               # Componentes de interfaz: encabezados, KPIs, insignias, footer
-│   └── charts.py           # Series temporales Plotly
+│   ├── ui.py               # Componentes de interfaz: encabezados, KPIs, ranking, descargas, footer
+│   ├── charts.py           # Gráficos Plotly (series, comunas, posición, ciclo anual, calendario)
+│   ├── nav.py              # Registro de páginas para enlazar entre módulos (perfil de barrio)
+│   └── i18n.py             # Textos en español e inglés y función t(clave, lang)
+├── tests/                  # Pruebas: funciones de apoyo y ejecución completa de cada página
 ├── assets/                 # Logo e ícono de la aplicación (SVG)
 ├── .streamlit/config.toml  # Tema visual y opciones del servidor
 ├── inputs/                 # Datos de entrada (ver sección 4)
@@ -271,11 +289,13 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 |---|---|
 | Colores, tipografía y radios del tema | `.streamlit/config.toml` **y** `COLORS` en `components/theme.py` (mantener sincronizados) |
 | Paleta, unidad o tipo de gráfico de cada variable | `VARIABLES` y `RASTER_VARS` en `components/theme.py` |
-| Mapa base | `TILES_URL` y `TILES_ATTR` en `components/theme.py` |
+| Mapa base | `TILES_URL` y `TILES_ATTR` (calles) y `SAT_URL`/`SAT_ATTR` (satélite) en `components/theme.py` |
+| Indicadores del mapa de barrios y del perfil | `INDICADORES` en `datos.py` |
+| Textos de la interfaz (español / inglés) | `_TEXTOS` en `components/i18n.py`: cada clave tiene el par (español, inglés) |
 | Opacidad del raster y estilo de los límites de barrio | `RASTER_OPACITY` y `BARRIO_LINE` en `components/theme.py` |
 | Zoom inicial de todos los mapas | `MAP_ZOOM` en `utils.py` |
 | Altura de los visores raster | `MAP_HEIGHT` en `components/theme.py` |
-| Textos y enlaces de cada fuente satelital | `FUENTES_META` en `views/satelital.py` |
+| Textos y enlaces de cada fuente satelital | `FUENTES_META` en `datos.py` |
 
 **Mapa base.** Se usa el servidor estándar de OpenStreetMap (`tile.openstreetmap.org`), que muestra calles, nombres de vías y edificios (desde zoom 16). Es un servicio comunitario con una [política de uso](https://operations.osmfoundation.org/policies/tiles/) que no admite tráfico intensivo: para un despliegue con muchos usuarios conviene un proveedor con API key (MapTiler, Stadia, CARTO, etc.), cambiando solo `TILES_URL`/`TILES_ATTR`.
 
@@ -288,6 +308,21 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 Para cada barrio y cada día se calcula el **promedio simple de los píxeles cuya celda intersecta el polígono** del barrio, ignorando píxeles sin dato. La intersección se resuelve con un índice espacial (STRtree de Shapely). El número de píxeles intersectados se muestra en el mapa y en las tablas.
 
 > Con resoluciones de 0.1° (~11 km) la mayoría de barrios cae en 1–2 píxeles, por lo que barrios vecinos suelen compartir valores. Es una limitación de la resolución de la fuente, no un error.
+
+### Indicadores del periodo, ranking y comunas
+
+- El **valor del periodo** de un barrio es la media de su serie zonal diaria (la lluvia es la **suma**); los días sin dato se ignoran y un barrio sin ningún dato queda vacío (no cuenta como 0).
+- El **puesto** ordena de mayor a menor (1 = valor más alto); los empates comparten puesto. Con fuentes de ~11 km muchos barrios comparten celda y empatan.
+- La **comuna** sale de los dos primeros dígitos del código de barrio (`id_sector`): 01–22 son las comunas y 81 el área de expansión urbana. El promedio por comuna es el promedio simple de sus barrios.
+- Al hacer clic en un mapa, el barrio se identifica por la **coordenada del clic** (punto en polígono), no por el elemento gráfico, para que los clics sobre un límite también funcionen.
+
+### Idiomas (i18n)
+
+- Todos los textos visibles pasan por `t("clave")` (`components/i18n.py`), que usa el idioma activo de la sesión; las funciones cacheadas reciben `lang` explícito.
+- **Cambiar de idioma no recalcula datos.** Los NetCDF, las estadísticas zonales y las series se cachean sin idioma (`datos.cargar`); el HTML del visor diario se cachea aparte por idioma (`datos.mapa_html`) a partir de esos datos. Una prueba verifica que el cambio no relee NetCDF ni recalcula estadísticas.
+- Los valores internos (nombres de columnas del CSV, comunas, claves de vista) siguen en español; solo se traducen al mostrarlos.
+- Streamlit guarda la selección de `selectbox`/`segmented_control` por su etiqueta visible; `conservar()` la mantiene al cambiar de idioma.
+- Para agregar un texto: crear la clave en `_TEXTOS` con ambos idiomas y usar `t("seccion.clave")`. `uv run pytest` falla si una clave usada no existe o le falta un idioma.
 
 ### Escalas de color
 
@@ -305,6 +340,8 @@ Los datos diarios se agrupan por **semana epidemiológica según INS Colombia / 
 - La **semana 1** es la primera semana con al menos 4 días en enero (la que contiene el primer miércoles del año); algunos años tienen semana 53.
 - Se incluyen las columnas `Año epi` y `Semana epi`. El cálculo se validó contra la librería [`epiweeks`](https://pypi.org/project/epiweeks/) (sistema CDC) con 100 % de coincidencia.
 - Precipitación: **suma** semanal. Resto de variables: **media** semanal.
+- **Ciclo anual:** para cada semana epidemiológica (1–53) se calculan los percentiles 10, 50 y 90 entre años (rango habitual y mediana) y se superpone el año elegido. El **calendario** muestra cada semana de cada año; en blanco, semanas sin dato.
+- La **ubicación** de cada estación (barrio y comuna) se obtiene con una unión espacial punto-en-polígono; las que caen fuera de los barrios se marcan como fuera del perímetro urbano.
 
 > Esta definición difiere de la ISO 8601 (lunes a domingo, semana 1 = la del primer jueves).
 
@@ -324,7 +361,10 @@ uv export --no-hashes --no-dev --no-emit-project -o requirements.txt
 uv export --no-hashes --no-dev --group descarga --no-emit-project -o requirements-descarga.txt
 
 # Linter
-uv run ruff check app.py utils.py components views descargas
+uv run ruff check app.py utils.py datos.py components views descargas tests
+
+# Pruebas (≈ 20 s): funciones de apoyo y ejecución completa de cada página con los datos de inputs/
+uv run pytest
 ```
 
 Recomendado: instalar `watchdog` para que la recarga automática sea más eficiente.

@@ -11,6 +11,8 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.io as pio
 
+from components.i18n import t
+
 # =========================================================================
 # Tokens de color
 # =========================================================================
@@ -37,7 +39,13 @@ FONT_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&
 # Endpoint sin subdominios {s}: OSM los declaró obsoletos.
 TILES_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 TILES_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+# Mapa base alternativo (desde el control de capas): imagen satelital sin API key, útil para leer NDVI/NDWI.
+# Su atribución se traduce: clave "mapa.sat_attr" en components/i18n.py
+SAT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 MAP_HEIGHT = 640
+
+# Paleta para comparar hasta tres series (barrio principal + 2): orden categórico fijo
+SERIE_COLORES = ["#2a78d6", "#eb6834", "#1baf7a"]
 
 # Opacidades calibradas para que la trama urbana se lea bajo los datos
 RASTER_OPACITY = 0.38
@@ -49,12 +57,28 @@ BARRIO_LINE = {"color": "#1f2937", "weight": 1.1, "opacity": 0.75}
 # =========================================================================
 @dataclass(frozen=True)
 class VarSpec:
-    label: str
+    id: str  # clave de traducción: var.<id> (nombre) y var_corta.<id> (etiqueta corta)
     unidad: str
-    agregacion: str
+    agregacion_id: str  # clave de traducción: agg.<agregacion_id>
     cmap: str
     forma: str = "linea"  # "linea" | "barra"
     decimales: int = 1
+
+    def texto(self, lang: str | None = None) -> str:
+        return t(f"var.{self.id}", lang)
+
+    @property
+    def label(self) -> str:
+        """Nombre de la variable en el idioma activo."""
+        return self.texto()
+
+    @property
+    def corta(self) -> str:
+        return t(f"var_corta.{self.id}")
+
+    @property
+    def agregacion(self) -> str:
+        return t(f"agg.{self.agregacion_id}")
 
     def fmt(self, v) -> str:
         if v is None or (isinstance(v, float) and np.isnan(v)):
@@ -62,22 +86,23 @@ class VarSpec:
         return f"{v:,.{self.decimales}f} {self.unidad}".strip()
 
 
+# Claves = nombres de columna del CSV de estaciones
 VARIABLES = {
-    "Precipitacion": VarSpec("Precipitación", "mm", "acumulado semanal", "Blues_09", "barra"),
-    "Tmin": VarSpec("Temperatura mínima", "°C", "media semanal", "YlOrRd_09"),
-    "Tmax": VarSpec("Temperatura máxima", "°C", "media semanal", "YlOrRd_09"),
-    "Humedad relativa": VarSpec("Humedad relativa", "%", "media semanal", "viridis"),
-    "Velocidad del viento": VarSpec("Velocidad del viento", "m/s", "media semanal", "PuBu_09"),
-    "Radiación solar": VarSpec("Radiación solar", "W/m²", "media semanal", "plasma"),
+    "Precipitacion": VarSpec("precipitacion", "mm", "acum_semanal", "Blues_09", "barra"),
+    "Tmin": VarSpec("tmin", "°C", "media_semanal", "YlOrRd_09"),
+    "Tmax": VarSpec("tmax", "°C", "media_semanal", "YlOrRd_09"),
+    "Humedad relativa": VarSpec("hr", "%", "media_semanal", "viridis"),
+    "Velocidad del viento": VarSpec("viento", "m/s", "media_semanal", "PuBu_09"),
+    "Radiación solar": VarSpec("radiacion", "W/m²", "media_semanal", "plasma"),
 }
 
 RASTER_VARS = {
-    "rh": VarSpec("Humedad relativa", "%", "diaria", "viridis"),
-    "t": VarSpec("Temperatura máxima", "°C", "diaria", "YlOrRd_09"),
-    "p": VarSpec("Precipitación", "mm", "diaria", "Blues_09", "barra", 2),
+    "rh": VarSpec("hr", "%", "diaria", "viridis"),
+    "t": VarSpec("tmax", "°C", "diaria", "YlOrRd_09"),
+    "p": VarSpec("precipitacion", "mm", "diaria", "Blues_09", "barra", 2),
     # Índices adimensionales (−1 a 1)
-    "ndvi": VarSpec("NDVI", "", "diario", "YlGn_09", decimales=2),
-    "ndwi": VarSpec("NDWI", "", "diario", "GnBu_09", decimales=2),
+    "ndvi": VarSpec("ndvi", "", "diaria", "YlGn_09", decimales=2),
+    "ndwi": VarSpec("ndwi", "", "diaria", "GnBu_09", decimales=2),
 }
 
 
@@ -109,8 +134,9 @@ def gradiente_css(cm: bcm.LinearColormap, pasos: int = 12) -> str:
 
 
 def leyenda_html(cm: bcm.LinearColormap, spec: VarSpec, titulo: str | None = None, ticks: int = 5,
-                 opacidad: float = 1.0) -> str:
+                 opacidad: float = 1.0, nota: str | None = None, lang: str | None = None) -> str:
     """Leyenda continua: degradado y marcas generados desde el colormap real (misma opacidad que la capa)."""
+    nota = t("mapa.nota_escala", lang) if nota is None else nota
     unidad = f" <span>({escape(spec.unidad)})</span>" if spec.unidad else ""
     valores = np.linspace(cm.vmin, cm.vmax, ticks)
     rango = cm.vmax - cm.vmin
@@ -125,10 +151,10 @@ def leyenda_html(cm: bcm.LinearColormap, spec: VarSpec, titulo: str | None = Non
         etiquetas.append(f"<span>{txt}</span>")
     return f"""
     <div class="gc-legend">
-        <div class="gc-legend-title">{escape(titulo or spec.label)}{unidad}</div>
+        <div class="gc-legend-title">{escape(titulo or spec.texto(lang))}{unidad}</div>
         <div class="gc-legend-bar" style="background: {gradiente_css(cm)}; opacity: {opacidad};"></div>
         <div class="gc-legend-ticks">{''.join(etiquetas)}</div>
-        <div class="gc-legend-note">Escala p2–p98 · extremos recortados</div>
+        <div class="gc-legend-note">{escape(nota)}</div>
     </div>"""
 
 
