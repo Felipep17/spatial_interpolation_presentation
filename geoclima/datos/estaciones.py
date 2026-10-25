@@ -1,4 +1,4 @@
-"""Estaciones in situ: agregación por semana epidemiológica y grilla de 1 km con las estaciones que contiene."""
+"""Estaciones in situ: agregación por semana epidemiológica y grillas (1 km GEE, 11 km AgERA5) con sus estaciones."""
 
 from pathlib import Path
 
@@ -9,7 +9,7 @@ import streamlit as st
 
 from geoclima.datos.barrios import preparar_barrios
 from geoclima.datos.grilla import RES_1KM, grilla_1km
-from geoclima.datos.raster import cargar_grilla_nc, celdas_sobre_cali
+from geoclima.datos.raster import cargar_grilla_nc, cargar_recorte_nc, celdas_sobre_cali
 from geoclima.ui.i18n import t
 
 
@@ -82,7 +82,23 @@ def grilla_1km_estaciones(_gdf, estaciones: pd.DataFrame, gee_nc: str | None, mt
     else:
         lats, lons, _ = grilla_1km(tuple(_gdf.total_bounds))
         pad, origen = RES_1KM / 2, "teórica"
+    return _grilla_con_estaciones(_gdf, estaciones, lats, lons, pad, origen)
 
+
+@st.cache_data(show_spinner=False)
+def grilla_agera5_estaciones(_gdf, estaciones: pd.DataFrame, nc: str, mtime: float):
+    """Celdas de AgERA5 (0.1°, ~11 km) que tocan Cali, con el mismo detalle que la grilla de 1 km.
+
+    Es el mismo recorte del visor de AgERA5: solo se leen los píxeles alrededor de Cali.
+    """
+    da, lat_col, lon_col, pad = cargar_recorte_nc(Path(nc), tuple(_gdf.total_bounds))
+    lats = np.round(da[lat_col].values.astype(float), 6)
+    lons = np.round(da[lon_col].values.astype(float), 6)
+    return _grilla_con_estaciones(_gdf, estaciones, lats, lons, pad, "AgERA5")
+
+
+def _grilla_con_estaciones(_gdf, estaciones: pd.DataFrame, lats, lons, pad: float, origen: str):
+    """Celdas de una grilla (centros y medio paso) que tocan Cali, con sus estaciones, y su resumen."""
     barrios = preparar_barrios(_gdf)
     celdas, total, celdas_por_barrio = celdas_sobre_cali(barrios, lats, lons, pad)
 

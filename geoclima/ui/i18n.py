@@ -156,6 +156,7 @@ _TEXTOS: dict[str, tuple[str, str]] = {
     "mapa.nota_escala_barrios": ("Escala p2–p98 entre barrios", "p2–p98 scale across neighborhoods"),
     "mapa.pista_clic": ("Clic en un barrio para ver su ficha.", "Click a neighborhood to see its summary."),
     "mapa.grilla": ("Grilla 1 km", "1 km grid"),
+    "mapa.grilla_agera5": ("Grilla 11 km (AgERA5)", "11 km grid (AgERA5)"),
     "mapa.celda": ("Celda", "Cell"),
     "mapa.centro": ("Centro", "Center"),
     "mapa.nombres": ("Nombres", "Names"),
@@ -286,8 +287,9 @@ _TEXTOS: dict[str, tuple[str, str]] = {
     "pan.mod_fuentes": ("Visor diario por píxel, mapa del periodo por barrio y tabla descargable de cada producto.",
                         "Daily per-pixel viewer, period map by neighborhood and a downloadable table for each "
                         "product."),
-    "pan.mod_estaciones": ("Series por semana epidemiológica, ciclo anual, calendario de datos y grilla de 1 km.",
-                           "Series by epidemiological week, annual cycle, data calendar and 1 km grid."),
+    "pan.mod_estaciones": ("Series por semana epidemiológica, ciclo anual, calendario de datos y grillas de 1 km y "
+                           "11 km.",
+                           "Series by epidemiological week, annual cycle, data calendar and 1 km and 11 km grids."),
     "pan.mod_barrio": ("Todas las fuentes para un barrio, su posición frente a Cali y comparación con otros barrios.",
                        "All sources for one neighborhood, its position relative to Cali and comparison with other "
                        "neighborhoods."),
@@ -424,6 +426,14 @@ _TEXTOS: dict[str, tuple[str, str]] = {
                          "para ver su detalle.",
                          "0.009° (~1 km) cells, the same as in the GEE NetCDF files. Hover over a cell to see its "
                          "details."),
+    "est.grilla_agera5_toggle": ("Grilla 11 km (AgERA5)", "11 km grid (AgERA5)"),
+    "est.grilla_agera5_ayuda": ("Celdas de 0.1° (~11 km), las mismas de los NetCDF de AgERA5 (C3S). Pase el cursor "
+                                "sobre una celda para ver su detalle; con la grilla de 1 km activa, se ve el de la "
+                                "celda de 1 km.",
+                                "0.1° (~11 km) cells, the same as in the AgERA5 (C3S) NetCDF files. Hover over a cell "
+                                "to see its details; with the 1 km grid on, the 1 km cell details are shown."),
+    "est.grilla_agera5_sin": ("No hay NetCDF de AgERA5 en inputs/raster/C3S.",
+                              "There is no AgERA5 NetCDF in inputs/raster/C3S."),
     "est.leyenda": ("Media por estación · {v}", "Station mean · {v}"),
     "est.fuera_perimetro": ("fuera del perímetro urbano", "outside the urban perimeter"),
     "est.sin_suficientes": ("Sin datos suficientes", "Insufficient data"),
@@ -445,6 +455,7 @@ _TEXTOS: dict[str, tuple[str, str]] = {
     "est.origen": ("Origen de la grilla", "Grid origin"),
     "est.origen_gee": ("NetCDF de GEE", "GEE NetCDF"),
     "est.origen_teorica": ("Teórica (aún sin descarga GEE)", "Theoretical (GEE not downloaded yet)"),
+    "est.origen_agera5": ("NetCDF de AgERA5 (C3S)", "AgERA5 (C3S) NetCDF"),
     "est.tamano_celda": ("Tamaño de celda", "Cell size"),
     "est.celdas_extension": ("Celdas en la extensión", "Cells in the extent"),
     "est.celdas_estacion": ("Celdas con estación", "Cells with a station"),

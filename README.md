@@ -12,7 +12,7 @@ Integra productos raster (reanálisis y satélite) y estaciones in situ sobre la
 | | CHIRPS v3.0 (0.05°) | Precipitación diaria, mismas dos vistas y acumulados por barrio |
 | | MSWEP (0.1°) | Precipitación diaria multi-fuente, mismas dos vistas |
 | | Google Earth Engine · MODIS (1 km) | NDVI y NDWI diarios sin nubes, mismas dos vistas |
-| **Estaciones in situ** | Red de estaciones meteorológicas (CSV) | Series por **semana epidemiológica (INS/CDC, domingo a sábado)**, barrio y comuna de cada estación, **ciclo anual** (rango habitual p10–p90 y un año elegido), **calendario año × semana**, completitud y **grilla de 1 km** activable |
+| **Estaciones in situ** | Red de estaciones meteorológicas (CSV) | Series por **semana epidemiológica (INS/CDC, domingo a sábado)**, barrio y comuna de cada estación, **ciclo anual** (rango habitual p10–p90 y un año elegido), **calendario año × semana**, completitud y **grillas de 1 km (GEE) y 11 km (AgERA5)** activables |
 
 En todos los mapas: mapa base de **calles (OSM) o satélite (Esri)**, **límites de comuna** activables, **pantalla completa** y búsqueda de barrio desde la barra lateral.
 
@@ -269,7 +269,7 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 │   │   ├── barrios.py        #   capa de barrios, comunas, barrio bajo un clic, puestos, GeoJSON
 │   │   ├── raster.py         #   NetCDF, estadísticas zonales, celdas de cada grilla sobre Cali
 │   │   ├── grilla.py         #   grilla fija de 1 km (la usan la app y descargas/gee.py)
-│   │   ├── estaciones.py     #   semana epidemiológica y grilla de 1 km con estaciones
+│   │   ├── estaciones.py     #   semana epidemiológica y grillas (1 km, 11 km) con estaciones
 │   │   └── fuentes.py        #   caché por fuente, indicadores del periodo y visor por idioma
 │   ├── mapas/                # Mapas Folium
 │   │   ├── base.py           #   mapa base, controles, estilos, capas de barrios y comunas
@@ -353,9 +353,11 @@ En el mapa de barrios, la vista **Animación diaria** colorea cada barrio con su
 
 Los límites de cada paleta se fijan en los **percentiles 2 y 98** de los datos (la precipitación parte de 0), para que los valores extremos no saturen el mapa. Las leyendas se generan desde el mismo colormap que pinta los datos.
 
-### Grilla de 1 km en estaciones
+### Grillas de 1 km y 11 km en estaciones
 
 El interruptor **Grilla 1 km (GEE)** del mapa de estaciones dibuja, totalmente transparentes, las celdas de 0.009° que tocan los barrios de Cali: las mismas del NetCDF de GEE (o la grilla teórica idéntica si aún no se ha descargado). Al pasar el cursor por una celda se ve su identificador, centro, estaciones que contiene, barrios que toca y porcentaje de su área dentro de Cali; debajo del mapa se resume cuántas celdas quedan en el área, cuántas tienen estación y cuántas celdas abarca cada barrio.
+
+El interruptor **Grilla 11 km (AgERA5)** dibuja del mismo modo las celdas de 0.1° de AgERA5 (C3S) que tocan Cali, con el mismo recorte del visor de esa fuente: 6 celdas (3 × 2), con las 31 estaciones dentro. Las dos grillas se pueden activar a la vez; la de 11 km se dibuja con un trazo más grueso y queda debajo de la de 1 km, así que el detalle al pasar el cursor es el de la celda de 1 km.
 
 ### Agregación semanal de estaciones
 

@@ -100,6 +100,9 @@ MAP_CSS = f"""
   }}
   .gc-tooltip {{ font-family: {FONT_STACK}; font-size: 12px; border-radius: 8px !important;
       border: 1px solid {COLORS["grid"]} !important; box-shadow: 0 4px 14px rgba(11,11,11,.08) !important; }}
+  /* Valores largos (lista de estaciones de una celda) en varias líneas; max-content porque el panel no tiene ancho */
+  .leaflet-tooltip.gc-tooltip {{ white-space: normal; width: max-content; max-width: 280px; }}
+  .gc-tooltip th {{ white-space: nowrap; vertical-align: top; }}
 </style>
 """
 

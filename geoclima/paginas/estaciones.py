@@ -9,7 +9,11 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from geoclima.datos.barrios import preparar_barrios
-from geoclima.datos.estaciones import cargar_y_procesar_estaciones, grilla_1km_estaciones
+from geoclima.datos.estaciones import (
+    cargar_y_procesar_estaciones,
+    grilla_1km_estaciones,
+    grilla_agera5_estaciones,
+)
 from geoclima.mapas.base import capa_barrios, capa_comunas, control_capas, mapa_base
 from geoclima.ui.componentes import (
     boton_descarga,
@@ -67,6 +71,11 @@ def _grilla(gdf, estaciones_info, inputs_path: Path):
     )
 
 
+def _nc_agera5(inputs_path: Path) -> Path | None:
+    """Cualquier NetCDF de AgERA5 sirve: todas sus variables comparten la grilla de 0.1°."""
+    return next(iter(sorted((inputs_path / "raster" / "C3S").glob("*.nc"))), None)
+
+
 @st.cache_data(show_spinner=False)
 def _ubicar_estaciones(_gdf, estaciones: pd.DataFrame) -> pd.DataFrame:
     """Barrio y comuna donde cae cada estación; las de fuera del perímetro urbano quedan como rurales."""
@@ -116,16 +125,16 @@ def _bloque_estacional(df_est: pd.DataFrame, variable: str, spec, estacion: str)
         st.caption(t("est.calendario_cap"))
 
 
-def _capa_grilla(celdas) -> folium.FeatureGroup:
+def _capa_grilla(celdas, nombre: str, grosor: float = 0.8) -> folium.FeatureGroup:
     """Celdas transparentes (solo contorno); el detalle aparece al pasar el cursor."""
-    fg = folium.FeatureGroup(name=t("mapa.grilla"))
+    fg = folium.FeatureGroup(name=nombre)
     folium.GeoJson(
         celdas,
         style_function=lambda f: {
             "fillColor": COLORS["accent"],
             "fillOpacity": 0.0,
             "color": COLORS["accent_dark"],
-            "weight": 0.8,
+            "weight": grosor,
             "opacity": 0.8,
         },
         highlight_function=lambda f: {"weight": 2.2, "fillOpacity": 0.12},
@@ -134,15 +143,20 @@ def _capa_grilla(celdas) -> folium.FeatureGroup:
             aliases=[t("mapa.celda"), t("mapa.centro"), t("gen.estaciones"), t("mapa.nombres"),
                      t("mapa.barrios_toca"), t("mapa.pct_cali")],
             sticky=True,
+            class_name="gc-tooltip",
         ),
     ).add_to(fg)
     return fg
 
 
-def _resumen_grilla(celdas, r: dict):
+_ORIGEN = {"GEE": "est.origen_gee", "teórica": "est.origen_teorica", "AgERA5": "est.origen_agera5"}
+
+
+def _resumen_grilla(celdas, r: dict, titulo: str, archivo: str, key: str):
     ny, nx = r["forma"]
+    st.markdown(f"**{titulo}**")
     filas = [
-        (t("est.origen"), t("est.origen_gee") if r["origen"] == "GEE" else t("est.origen_teorica")),
+        (t("est.origen"), t(_ORIGEN[r["origen"]])),
         (t("est.tamano_celda"), f"{r['res']:.3f}° · ~{r['res'] * 111.32:.2f} km"),
         (t("est.celdas_extension"), f"{r['total']:,} ({ny} × {nx})"),
         (t("sat.celdas_tocan"), f"{r['tocan_cali']:,}"),
@@ -164,7 +178,7 @@ def _resumen_grilla(celdas, r: dict):
     with st.expander(t("est.celdas_con_est", n=len(con_est))):
         st.dataframe(con_est, hide_index=True,
                      column_config={nombres["pct_cali"]: st.column_config.NumberColumn(format="%d %%")})
-        boton_descarga(vista, "grilla_1km_celdas_cali", key="dl_grilla")
+        boton_descarga(vista, archivo, key=key)
 
 
 def render(gdf, inputs_path: Path):
@@ -277,8 +291,11 @@ def render(gdf, inputs_path: Path):
         t1, t2 = st.columns([3, 2], vertical_alignment="bottom")
         with t1:
             section_title(t("est.red"), t("est.red_cap", v=spec.label.lower()))
+        nc_agera5 = _nc_agera5(inputs_path)
         with t2:
             ver_grilla = st.toggle(t("est.grilla_toggle"), key="grilla_1km", help=t("est.grilla_ayuda"))
+            ver_agera5 = st.toggle(t("est.grilla_agera5_toggle"), key="grilla_agera5", disabled=nc_agera5 is None,
+                                   help=t("est.grilla_agera5_ayuda") if nc_agera5 else t("est.grilla_agera5_sin"))
         medias = resumen.set_index("Estación")["Media"]
         cm = colormap(spec.cmap, *escala_robusta(medias.values))
 
@@ -307,9 +324,15 @@ def render(gdf, inputs_path: Path):
                 tooltip=nombre,  # el clic se identifica por este texto: solo el nombre de la estación
             ).add_to(fg)
 
-        grupos = [fg]
+        # Las grillas van debajo de los marcadores; la de 1 km encima de la de 11 km para conservar su detalle
+        grillas = []
+        if ver_agera5 and nc_agera5:
+            celdas_ag, info_ag, _ = grilla_agera5_estaciones(gdf, estaciones_info, str(nc_agera5),
+                                                             nc_agera5.stat().st_mtime)
+            grillas.append(_capa_grilla(celdas_ag, t("mapa.grilla_agera5"), grosor=1.6))
         if ver_grilla:
-            grupos = [_capa_grilla(celdas), fg]  # la grilla debajo de los marcadores
+            grillas.append(_capa_grilla(celdas, t("mapa.grilla")))
+        grupos = [*grillas, fg]
 
         control_capas(m)
         salida = st_folium(
@@ -322,7 +345,10 @@ def render(gdf, inputs_path: Path):
         )
         st.html(leyenda_html(cm, spec, t("est.leyenda", v=spec.label)))
         if ver_grilla:
-            _resumen_grilla(celdas, info_grilla)
+            _resumen_grilla(celdas, info_grilla, t("est.grilla_toggle"), "grilla_1km_celdas_cali", key="dl_grilla")
+        if ver_agera5 and nc_agera5:
+            _resumen_grilla(celdas_ag, info_ag, t("est.grilla_agera5_toggle"), "grilla_agera5_11km_celdas_cali",
+                            key="dl_grilla_agera5")
 
         clic = (salida or {}).get("last_object_clicked_tooltip")
         if clic in con_datos and clic != st.session_state.get("_ultimo_clic"):

@@ -122,6 +122,18 @@ def test_estaciones(lang):
     assert t("est.titulo", lang) in _textos_html(at)
 
 
+@pytest.mark.parametrize("lang", ["es", "en"])
+def test_estaciones_grillas(lang):
+    """Grillas de 1 km (GEE) y 11 km (AgERA5) activas a la vez: cada una con su resumen."""
+    at = _pagina("estaciones", lang)
+    at.toggle(key="grilla_1km").set_value(True)
+    at.toggle(key="grilla_agera5").set_value(True).run()
+    _sin_errores(at)
+    html = _textos_html(at)
+    assert t("est.origen_gee", lang) in html and t("est.origen_agera5", lang) in html
+    assert "0.100°" in html  # tamaño de celda de AgERA5
+
+
 @pytest.mark.parametrize(("lang", "variable", "columna"), [
     ("es", "Precipitación", "Precipitacion"), ("es", "T. máxima", "Tmax"), ("es", "Humedad", "Humedad relativa"),
     ("en", "Precipitation", "Precipitacion"), ("en", "Max. temp.", "Tmax"),
