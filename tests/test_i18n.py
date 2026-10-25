@@ -1,4 +1,4 @@
-"""Pruebas del módulo de traducción (components/i18n.py)."""
+"""Pruebas del módulo de traducción (geoclima/ui/i18n.py)."""
 
 import re
 from pathlib import Path
@@ -6,13 +6,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from components.i18n import IDIOMAS, TEXTOS, locale_js, meses, t, t_comuna
-from datos import INDICADORES, rango_fechas
-from components.theme import RASTER_VARS, VARIABLES
+from geoclima.datos.fuentes import INDICADORES
+from geoclima.ui.i18n import IDIOMAS, TEXTOS, locale_js, meses, rango_fechas, t, t_comuna
+from geoclima.ui.tema import RASTER_VARS, VARIABLES
 
 RAIZ = Path(__file__).resolve().parent.parent
-FUENTES_PY = [RAIZ / "app.py", RAIZ / "utils.py", RAIZ / "datos.py",
-              *sorted((RAIZ / "components").glob("*.py")), *sorted((RAIZ / "views").glob("*.py"))]
+FUENTES_PY = [RAIZ / "app.py", *sorted((RAIZ / "geoclima").rglob("*.py"))]
 
 
 def test_todas_las_claves_tienen_ambos_idiomas():
@@ -84,4 +83,5 @@ def test_fechas_y_locale():
     assert meses("en")[7] == "Aug" and meses("es")[7] == "ago"
     assert rango_fechas(pd.Timestamp("2026-08-01"), pd.Timestamp("2026-08-31"), "en") == "01–31 Aug 2026"
     assert rango_fechas(pd.Timestamp("2014-06-01"), pd.Timestamp("2025-01-31"), "en") == "Jun 2014 – Jan 2025"
-    assert locale_js("en") == "en-US" and locale_js("es") == "es-CO"
+    # Punto decimal en ambos idiomas, como el resto de la app
+    assert locale_js("en") == locale_js("es") == "en-US"

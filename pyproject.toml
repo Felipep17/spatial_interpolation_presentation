@@ -43,8 +43,11 @@ target-version = "py311"
 
 [tool.ruff.lint]
 # Reglas fijadas en el proyecto para que el resultado no dependa de la configuración global
-select = ["E", "F", "W", "B"]
+select = ["E", "F", "W", "B", "I"]
 ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["geoclima", "descargas"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

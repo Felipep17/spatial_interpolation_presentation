@@ -11,7 +11,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.io as pio
 
-from components.i18n import t
+from geoclima.ui.i18n import t
 
 # =========================================================================
 # Tokens de color
@@ -40,7 +40,7 @@ FONT_URL = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&
 TILES_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 TILES_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 # Mapa base alternativo (desde el control de capas): imagen satelital sin API key, útil para leer NDVI/NDWI.
-# Su atribución se traduce: clave "mapa.sat_attr" en components/i18n.py
+# Su atribución se traduce: clave "mapa.sat_attr" en geoclima/ui/i18n.py
 SAT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 MAP_HEIGHT = 640
 

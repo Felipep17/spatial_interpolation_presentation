@@ -6,7 +6,7 @@ Integra productos raster (reanálisis y satélite) y estaciones in situ sobre la
 
 | Módulo | Fuente | Qué muestra |
 |---|---|---|
-| **Panorama** (inicio) | Todas | **Mapa de barrios** (coropleta del periodo con 6 indicadores, filtro por comuna, ficha al hacer clic y ranking), promedio por comuna, cobertura temporal de las fuentes, cuánto distingue cada fuente entre barrios y comparación CHIRPS–MSWEP |
+| **Panorama** (inicio) | Todas | **Mapa de barrios** (coropleta del periodo con 6 indicadores, filtro por comuna, ficha al hacer clic y ranking, o **animación diaria** con reproducción), promedio por comuna, cobertura temporal de las fuentes, cuánto distingue cada fuente entre barrios y comparación CHIRPS–MSWEP |
 | **Perfil de barrio** | Todas | Barrio con su comuna, celdas de 1 km, **vecinos** y estaciones cercanas; indicadores con **puesto entre 357 barrios**, gráfico de **posición frente a los demás barrios**, series diarias y **comparación con hasta 2 barrios** (clic en el mapa para cambiar de barrio) |
 | **Fuentes satelitales** | Copernicus C3S · AgERA5 (0.1°) | Humedad relativa y temperatura máxima diarias: **visor diario por píxel** o **mapa del periodo por barrio** |
 | | CHIRPS v3.0 (0.05°) | Precipitación diaria, mismas dos vistas y acumulados por barrio |
@@ -95,10 +95,10 @@ pip install -r requirements.txt
 Para usar además los scripts de descarga (GEE y MSWEP) con pip:
 
 ```bash
-pip install -r requirements-descarga.txt
+pip install -r descargas/requirements.txt
 ```
 
-`requirements.txt` (solo la app) y `requirements-descarga.txt` (app + descargas) se generan desde `uv.lock`; no los edites a mano (ver [Desarrollo](#8-desarrollo)).
+`requirements.txt` (solo la app) y `descargas/requirements.txt` (app + descargas) se generan desde `uv.lock`; no los edites a mano (ver [Desarrollo](#8-desarrollo)).
 
 ---
 
@@ -164,8 +164,7 @@ inputs/
 │   │   └── chirps_2026_08_cali.nc
 │   ├── MSWEP/                        # (opcional) solo se listan los archivos
 │   └── GEE/                          # (opcional) solo se listan los archivos
-├── climaticas_post_calidad.csv       # Estaciones in situ
-└── logo.png                          # (opcional) franja institucional de aliados
+└── climaticas_post_calidad.csv       # Estaciones in situ
 ```
 
 ### 4.1 Capa de barrios — `inputs/shapefiles/`
@@ -226,7 +225,7 @@ uv sync --group descarga
    ```
 
 - Fuente: `MODIS/061/MOD09GA` diario. NDVI = (b02 − b01)/(b02 + b01); NDWI (Gao) = (b02 − b06)/(b02 + b06).
-- Los píxeles de 500 m se **promedian** sobre una grilla fija de **0.009° (~1 km)** definida en `descargas/comun.py`.
+- Los píxeles de 500 m se **promedian** sobre una grilla fija de **0.009° (~1 km)** definida en `geoclima/datos/grilla.py`.
 - Nubes, sombras y nubes internas se enmascaran con la banda QA `state_1km` (`--sin-mascara-nubes` lo desactiva). En días nublados las celdas quedan vacías.
 
 **MSWEP — precipitación diaria 0.1°** → `inputs/raster/MSWEP/mswep_<AAAA_MM>_cali.nc`
@@ -243,7 +242,7 @@ uv sync --group descarga
 
 Ambos scripts aceptan `--inicio AAAA-MM-DD --fin AAAA-MM-DD` para otro periodo. Si falta algún archivo, la vista correspondiente muestra el comando exacto de descarga.
 
-### 4.5 Logo institucional — `inputs/logo.png` (opcional)
+### 4.5 Logo institucional — `assets/aliados.png` (opcional)
 
 PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a la derecha de cada página y en tamaño completo en el pie de página. El margen transparente se recorta automáticamente.
 
@@ -253,33 +252,46 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 
 ```
 .
-├── app.py                  # Punto de entrada: configuración, barra lateral y navegación
-├── utils.py                # Carga de datos, estadísticas zonales y construcción de mapas
-├── datos.py                # Procesamiento cacheado de cada fuente, compartido por las páginas
-├── descargas/              # Scripts de descarga: GEE (NDVI/NDWI 1 km) y MSWEP; grilla de 1 km común
-├── views/
-│   ├── panorama.py         # Inicio · mapa de barrios, comunas y resumen de todas las fuentes
-│   ├── explorador.py       # Coropleta + ficha + ranking (compartido por Panorama y Fuentes)
-│   ├── satelital.py        # Módulo 01 · Fuentes satelitales (AgERA5, CHIRPS, MSWEP, GEE)
-│   ├── estaciones.py       # Módulo 02 · Estaciones in situ, ciclo anual y grilla de 1 km
-│   └── barrio.py           # Módulo 03 · Perfil de barrio y comparación
-├── components/
-│   ├── theme.py            # Tokens de diseño: colores, variables, paletas, leyendas, plantilla Plotly
-│   ├── ui.py               # Componentes de interfaz: encabezados, KPIs, ranking, descargas, footer
-│   ├── charts.py           # Gráficos Plotly (series, comunas, posición, ciclo anual, calendario)
-│   ├── nav.py              # Registro de páginas para enlazar entre módulos (perfil de barrio)
-│   └── i18n.py             # Textos en español e inglés y función t(clave, lang)
-├── tests/                  # Pruebas: funciones de apoyo y ejecución completa de cada página
-├── assets/                 # Logo e ícono de la aplicación (SVG)
-├── .streamlit/config.toml  # Tema visual y opciones del servidor
-├── inputs/                 # Datos de entrada (ver sección 4)
-├── outputs/                # Productos generados fuera de la app
-├── pyproject.toml          # Dependencias del proyecto
-├── uv.lock                 # Versiones exactas (no editar a mano)
-├── requirements.txt        # Exportado de uv.lock para instalar la app con pip
-├── requirements-descarga.txt  # Igual, más las dependencias de descargas/
-└── .python-version         # Versión de Python del proyecto (3.12)
+├── app.py                    # Punto de entrada (Streamlit Cloud ejecuta este archivo): configuración,
+│                             # idioma, navegación y marco común. No contiene lógica.
+├── geoclima/                 # Código de la aplicación, por capas
+│   ├── rutas.py              # Rutas del proyecto (inputs, assets, CSV de estaciones)
+│   ├── datos/                # Lectura y cálculo, sin interfaz
+│   │   ├── barrios.py        #   capa de barrios, comunas, barrio bajo un clic, puestos, GeoJSON
+│   │   ├── raster.py         #   NetCDF, estadísticas zonales, celdas de cada grilla sobre Cali
+│   │   ├── grilla.py         #   grilla fija de 1 km (la usan la app y descargas/gee.py)
+│   │   ├── estaciones.py     #   semana epidemiológica y grilla de 1 km con estaciones
+│   │   └── fuentes.py        #   caché por fuente, indicadores del periodo y visor por idioma
+│   ├── mapas/                # Mapas Folium
+│   │   ├── base.py           #   mapa base, controles, estilos, capas de barrios y comunas
+│   │   ├── visor.py          #   visores diarios por píxel
+│   │   └── coropleta.py      #   coropleta del periodo y animación diaria
+│   ├── ui/                   # Interfaz
+│   │   ├── tema.py           #   tokens de diseño, variables, escalas y leyendas
+│   │   ├── i18n.py           #   textos ES/EN, t(clave, lang) y fechas
+│   │   ├── componentes.py    #   encabezados, KPIs, ranking, descargas, franja y pie
+│   │   ├── graficos.py       #   gráficos Plotly
+│   │   ├── barra_lateral.py  #   idioma, búsqueda de barrio, periodos y referencia espacial
+│   │   └── navegacion.py     #   registro de páginas y enlaces al perfil de barrio
+│   └── paginas/              # Una función render() por página
+│       ├── panorama.py       #   inicio
+│       ├── satelital.py      #   módulo 01 · fuentes satelitales
+│       ├── estaciones.py     #   módulo 02 · estaciones in situ
+│       ├── barrio.py         #   módulo 03 · perfil de barrio
+│       └── explorador.py     #   mapa de barrios compartido por Panorama y Fuentes
+├── descargas/                # Scripts de descarga (python -m descargas.gee / descargas.mswep)
+│   └── requirements.txt      #   app + dependencias de descarga, para instalar con pip
+├── tests/                    # Pruebas (uv run pytest)
+├── assets/                   # Logo, ícono y franja de aliados
+├── inputs/                   # Datos de entrada (ver sección 4)
+├── docs/                     # Notas locales (handoff.md no se versiona)
+├── .streamlit/config.toml    # Tema visual y opciones del servidor
+├── pyproject.toml · uv.lock  # Dependencias (uv.lock: versiones exactas, no editar a mano)
+├── requirements.txt          # Exportado de uv.lock para Streamlit Cloud / pip
+└── .python-version           # Python 3.12
 ```
+
+Dependencias entre capas: `ui/tema` e `ui/i18n` no dependen de nada del paquete; `datos/` usa solo esas dos (y `mapas/visor` para el HTML del visor); `mapas/` usa `datos/barrios` y `ui/`; `paginas/` usa todo lo anterior. `app.py` solo importa páginas y marco.
 
 ---
 
@@ -287,15 +299,15 @@ PNG con fondo transparente. Si existe, se muestra en versión compacta arriba a 
 
 | Qué cambiar | Dónde |
 |---|---|
-| Colores, tipografía y radios del tema | `.streamlit/config.toml` **y** `COLORS` en `components/theme.py` (mantener sincronizados) |
-| Paleta, unidad o tipo de gráfico de cada variable | `VARIABLES` y `RASTER_VARS` en `components/theme.py` |
-| Mapa base | `TILES_URL` y `TILES_ATTR` (calles) y `SAT_URL`/`SAT_ATTR` (satélite) en `components/theme.py` |
-| Indicadores del mapa de barrios y del perfil | `INDICADORES` en `datos.py` |
-| Textos de la interfaz (español / inglés) | `_TEXTOS` en `components/i18n.py`: cada clave tiene el par (español, inglés) |
-| Opacidad del raster y estilo de los límites de barrio | `RASTER_OPACITY` y `BARRIO_LINE` en `components/theme.py` |
-| Zoom inicial de todos los mapas | `MAP_ZOOM` en `utils.py` |
-| Altura de los visores raster | `MAP_HEIGHT` en `components/theme.py` |
-| Textos y enlaces de cada fuente satelital | `FUENTES_META` en `datos.py` |
+| Colores, tipografía y radios del tema | `.streamlit/config.toml` **y** `COLORS` en `geoclima/ui/tema.py` (mantener sincronizados) |
+| Paleta, unidad o tipo de gráfico de cada variable | `VARIABLES` y `RASTER_VARS` en `geoclima/ui/tema.py` |
+| Mapa base | `TILES_URL` y `TILES_ATTR` (calles) y `SAT_URL`/`SAT_ATTR` (satélite) en `geoclima/ui/tema.py` |
+| Indicadores del mapa de barrios y del perfil | `INDICADORES` en `geoclima/datos/fuentes.py` |
+| Textos de la interfaz (español / inglés) | `_TEXTOS` en `geoclima/ui/i18n.py`: cada clave tiene el par (español, inglés) |
+| Opacidad del raster y estilo de los límites de barrio | `RASTER_OPACITY` y `BARRIO_LINE` en `geoclima/ui/tema.py` |
+| Zoom inicial de todos los mapas | `MAP_ZOOM` en `geoclima/mapas/base.py` |
+| Altura de los visores raster | `MAP_HEIGHT` en `geoclima/ui/tema.py` |
+| Textos y enlaces de cada fuente satelital | `FUENTES_META` en `geoclima/datos/fuentes.py` |
 
 **Mapa base.** Se usa el servidor estándar de OpenStreetMap (`tile.openstreetmap.org`), que muestra calles, nombres de vías y edificios (desde zoom 16). Es un servicio comunitario con una [política de uso](https://operations.osmfoundation.org/policies/tiles/) que no admite tráfico intensivo: para un despliegue con muchos usuarios conviene un proveedor con API key (MapTiler, Stadia, CARTO, etc.), cambiando solo `TILES_URL`/`TILES_ATTR`.
 
@@ -318,11 +330,15 @@ Para cada barrio y cada día se calcula el **promedio simple de los píxeles cuy
 
 ### Idiomas (i18n)
 
-- Todos los textos visibles pasan por `t("clave")` (`components/i18n.py`), que usa el idioma activo de la sesión; las funciones cacheadas reciben `lang` explícito.
+- Todos los textos visibles pasan por `t("clave")` (`geoclima/ui/i18n.py`), que usa el idioma activo de la sesión; las funciones cacheadas reciben `lang` explícito.
 - **Cambiar de idioma no recalcula datos.** Los NetCDF, las estadísticas zonales y las series se cachean sin idioma (`datos.cargar`); el HTML del visor diario se cachea aparte por idioma (`datos.mapa_html`) a partir de esos datos. Una prueba verifica que el cambio no relee NetCDF ni recalcula estadísticas.
 - Los valores internos (nombres de columnas del CSV, comunas, claves de vista) siguen en español; solo se traducen al mostrarlos.
 - Streamlit guarda la selección de `selectbox`/`segmented_control` por su etiqueta visible; `conservar()` la mantiene al cambiar de idioma.
 - Para agregar un texto: crear la clave en `_TEXTOS` con ambos idiomas y usar `t("seccion.clave")`. `uv run pytest` falla si una clave usada no existe o le falta un idioma.
+
+### Animación diaria por barrio
+
+En el mapa de barrios, la vista **Animación diaria** colorea cada barrio con su valor zonal de cada día (▶ reproduce, ‹ › avanzan un día, el deslizador salta a cualquier fecha; al pasar el cursor se lee el valor y el puesto del barrio ese día). La escala es común a todos los días para que los colores sean comparables, se omiten los días sin ningún dato (p. ej. nublados en MODIS) y el mapa abre en el día de mayor promedio. La geometría de los barrios se envía una sola vez y solo cambia el color por día, así la animación corre en el navegador sin recargar la página.
 
 ### Escalas de color
 
@@ -358,10 +374,10 @@ uv lock --upgrade && uv sync
 
 # Regenerar los requirements tras cambiar dependencias
 uv export --no-hashes --no-dev --no-emit-project -o requirements.txt
-uv export --no-hashes --no-dev --group descarga --no-emit-project -o requirements-descarga.txt
+uv export --no-hashes --no-dev --group descarga --no-emit-project -o descargas/requirements.txt
 
 # Linter
-uv run ruff check app.py utils.py datos.py components views descargas tests
+uv run ruff check .
 
 # Pruebas (≈ 20 s): funciones de apoyo y ejecución completa de cada página con los datos de inputs/
 uv run pytest
@@ -385,7 +401,7 @@ uv add --dev watchdog
 | `No se encontró la carpeta 'inputs'` | La app se lanzó desde otra ruta o falta la carpeta | Verifica que `inputs/` esté junto a `app.py` |
 | `No se encontró la capa vectorial de barrios` | `inputs/shapefiles/` vacía o con formato no soportado | Agrega un `.parquet`, `.shp` (con sus `.dbf/.shx/.prj`), `.geojson` o `.gpkg` |
 | El mapa se ve gris, sin calles | Sin internet, firewall o bloqueo del servidor de OSM | Revisa la conexión; en redes corporativas permite `tile.openstreetmap.org`. Si persiste, cambia el proveedor (sección 6) |
-| "Archivos incompletos" en C3S | Los nombres no contienen `relative_humidity` / `temperature_maximu` | Renombra los archivos o ajusta la búsqueda en `views/satelital.py` |
+| "Archivos incompletos" en C3S | Los nombres no contienen `relative_humidity` / `temperature_maximu` | Renombra los archivos o ajusta la búsqueda en `geoclima/datos/fuentes.py` (`archivos_fuente`) |
 | `Port 8501 is already in use` | Ya hay otra app corriendo | Ciérrala o usa `--server.port 8600` |
 | Datos viejos tras reemplazar un archivo | Caché del navegador o de Streamlit | Menú ⋮ → **Clear cache** y recarga, o reinicia el servidor |
 | "Page not found" al abrir una URL antigua | La página de inicio (Panorama) se sirve en `/` | Usa `http://localhost:8501/` o las rutas de la sección 3 |

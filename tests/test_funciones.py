@@ -8,8 +8,16 @@ import pandas as pd
 import pytest
 import shapely
 
-from datos import agregar, rango_fechas
-from utils import barrio_en_clic, comuna_de, geojson_barrios, orden_comunas, preparar_barrios, puestos
+from geoclima.datos.barrios import (
+    barrio_en_clic,
+    comuna_de,
+    geojson_barrios,
+    orden_comunas,
+    preparar_barrios,
+    puestos,
+)
+from geoclima.datos.fuentes import agregar
+from geoclima.ui.i18n import rango_fechas
 
 
 @pytest.fixture
@@ -70,3 +78,21 @@ def test_geojson_barrios(barrios):
     assert [f["properties"]["Barrio"] for f in geo["features"]] == ["B", "A"]
     assert "Serie" not in geo["features"][0]["properties"]  # sin columnas de mini-gráficos
     assert geo["features"][0]["geometry"]["type"] == "Polygon"
+
+
+def test_coropleta_animada_omite_dias_sin_dato(barrios):
+    from geoclima.mapas.coropleta import mapa_coropleta_animado
+    from geoclima.ui.tema import RASTER_VARS
+
+    fechas = list(pd.date_range("2026-08-01", periods=4))
+    # 3 barrios × 4 días; el día 2 no tiene ningún dato (p. ej. nublado) y el día 3 tiene el mayor promedio
+    mat = np.array([[1.0, 2.0, np.nan, 9.0], [3.0, np.nan, np.nan, 8.0], [np.nan, 4.0, np.nan, 7.0]])
+    html = mapa_coropleta_animado(barrios, mat, fechas, RASTER_VARS["p"], "Prueba", etiqueta="Lluvia",
+                                  lang="en").get_root().render()
+    datos = json.loads(html.split("window.GCA = Object.assign(")[1].split(", {map:")[0])
+    assert datos["fechas"] == ["01 Aug 2026", "02 Aug 2026", "04 Aug 2026"]  # el 03 se omite
+    assert datos["valores"][2] == [9.0, 8.0, 7.0]
+    assert datos["puestos"][2] == [1, 2, 3]
+    assert datos["valores"][0][2] is None and datos["puestos"][0][2] == 0
+    assert datos["inicio"] == 2  # abre en el día de mayor promedio
+    assert datos["comunas"] == ["Commune 1", "Commune 19", "Urban expansion area"]

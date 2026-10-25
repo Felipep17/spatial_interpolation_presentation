@@ -5,7 +5,7 @@
 
 import streamlit as st
 
-from components.i18n import CLAVE_IDIOMA, IDIOMA_DEFECTO, idioma, t
+from geoclima.ui.i18n import CLAVE_IDIOMA, IDIOMA_DEFECTO, idioma, t
 
 PAGINAS: dict = {}
 

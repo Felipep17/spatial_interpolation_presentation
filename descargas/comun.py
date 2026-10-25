@@ -1,25 +1,18 @@
-"""Elementos compartidos por los scripts de descarga y por la app.
+"""Elementos compartidos por los scripts de descarga.
 
-La grilla de 1 km se define aquí una sola vez: los NetCDF de GEE se descargan
-sobre ella y la vista de estaciones la dibuja.
+La grilla de 1 km se define en geoclima/datos/grilla.py (la usa también la app) y las rutas en geoclima/rutas.py.
 """
 
 from datetime import date
 from pathlib import Path
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import xarray as xr
 
-RAIZ = Path(__file__).resolve().parent.parent
-INPUTS = RAIZ / "inputs"
-RASTER = INPUTS / "raster"
-
-# 0.009° ≈ 1.002 km en latitud y ≈ 1.000 km en longitud a la latitud de Cali (3.4° N)
-RES_1KM = 0.009
-# Margen alrededor de la extensión de Cali (grados)
-MARGEN = 0.02
+from geoclima.datos.grilla import MARGEN, RES_1KM  # noqa: F401 (reexportados para gee.py y mswep.py)
+from geoclima.datos.grilla import grilla_1km as _grilla_1km
+from geoclima.rutas import INPUTS, RASTER  # noqa: F401 (RASTER se reexporta para gee.py y mswep.py)
 
 
 def bounds_cali() -> tuple[float, float, float, float]:
@@ -31,17 +24,8 @@ def bounds_cali() -> tuple[float, float, float, float]:
 
 
 def grilla_1km(bounds=None):
-    """Centros (lats descendentes, lons ascendentes) de la grilla fija de 1 km que cubre Cali."""
-    minx, miny, maxx, maxy = bounds or bounds_cali()
-    x0 = np.floor((minx - MARGEN) / RES_1KM) * RES_1KM
-    x1 = np.ceil((maxx + MARGEN) / RES_1KM) * RES_1KM
-    y0 = np.floor((miny - MARGEN) / RES_1KM) * RES_1KM
-    y1 = np.ceil((maxy + MARGEN) / RES_1KM) * RES_1KM
-    nx = int(round((x1 - x0) / RES_1KM))
-    ny = int(round((y1 - y0) / RES_1KM))
-    lons = np.round(x0 + RES_1KM * (np.arange(nx) + 0.5), 6)
-    lats = np.round(y1 - RES_1KM * (np.arange(ny) + 0.5), 6)
-    return lats, lons, (round(float(x0), 6), round(float(y1), 6))
+    """Grilla de 1 km sobre `bounds` o, si no se indican, sobre la extensión de la capa de barrios."""
+    return _grilla_1km(bounds or bounds_cali())
 
 
 def periodo_chirps() -> tuple[date, date]:

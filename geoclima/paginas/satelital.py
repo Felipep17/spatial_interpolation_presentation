@@ -5,17 +5,31 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from components.charts import mostrar, serie_temporal
-from components.i18n import conservar, t, t_comuna
-from components.nav import enlace_barrio
-from components.theme import MAP_HEIGHT, RASTER_VARS, VarSpec
-from components.ui import boton_descarga, empty_state, metric_card, render_header, section_title, tabla_resumen
-from datos import FUENTES_META, INDICADORES, cargar, mapa_html, meta_txt
-from datos import archivos as _archivos
-from datos import resolucion as _resolucion
-from datos import serie_area as _serie_area
-from utils import geojson_barrios, listar_fuentes, orden_comunas, preparar_barrios
-from views.explorador import TODA_CALI, explorador, nombre_ambito
+from geoclima.datos.barrios import geojson_barrios, orden_comunas, preparar_barrios
+from geoclima.datos.fuentes import (
+    FUENTES_META,
+    INDICADORES,
+    archivos_fuente,
+    cargar,
+    mapa_html,
+    meta_txt,
+    resolucion,
+    serie_area,
+)
+from geoclima.datos.raster import listar_fuentes
+from geoclima.paginas.explorador import TODA_CALI, explorador, nombre_ambito
+from geoclima.ui.componentes import (
+    boton_descarga,
+    empty_state,
+    metric_card,
+    render_header,
+    section_title,
+    tabla_resumen,
+)
+from geoclima.ui.graficos import mostrar, serie_temporal
+from geoclima.ui.i18n import conservar, t, t_comuna
+from geoclima.ui.navegacion import enlace_barrio
+from geoclima.ui.tema import MAP_HEIGHT, RASTER_VARS, VarSpec
 
 # Las etiquetas también van en la URL (?fuente=…&vista=…): cortas y sin símbolos
 VISTAS = {"diario": "sat.vista_diario", "periodo": "sat.vista_periodo"}
@@ -80,7 +94,7 @@ def _bloque_extent(r: dict, clave_unidad: str = "sat.pixeles_barrio"):
     ny, nx = r["forma"]
     section_title(t("sat.grilla"), t("sat.grilla_cap"))
     tabla_resumen([
-        (t("gen.resolucion"), _resolucion(r["res"])),
+        (t("gen.resolucion"), resolucion(r["res"])),
         (t("sat.celdas_extent"), f"{r['total']:,} ({ny} × {nx})"),
         (t("sat.celdas_tocan"), t("sat.celdas_tocan_val", n=f"{r['tocan_cali']:,}",
                                   pct=f"{100 * r['tocan_cali'] / max(r['total'], 1):.0f}")),
@@ -130,7 +144,7 @@ def render(gdf, inputs_path: Path):
             st.link_button(t("sat.documentacion"), meta["url"], icon=":material/open_in_new:", type="tertiary",
                            width="stretch")
 
-    rutas = _archivos(fuente, lista)
+    rutas = archivos_fuente(fuente, lista)
     if fuente == "C3S":
         if rutas:
             _render_c3s(gdf, rutas)
@@ -155,7 +169,7 @@ def _render_c3s(gdf, rutas: dict):
         b = cargar("C3S", gdf, rutas)
 
     times = b["times"]
-    rh, tx = _serie_area(b["stats"], "rh"), _serie_area(b["stats"], "t")
+    rh, tx = serie_area(b["stats"], "rh"), serie_area(b["stats"], "t")
     s_rh, s_t = RASTER_VARS["rh"], RASTER_VARS["t"]
     periodo = f"{times[0]:%d/%m/%Y} – {times[-1]:%d/%m/%Y}"
 
@@ -175,7 +189,7 @@ def _render_c3s(gdf, rutas: dict):
                     delta_color="off", neutral_delta=True, help=f"{times[-1]:%d/%m/%Y}")
     with k4:
         metric_card(t("sat.kpi_cobertura"), t("gen.n_dias", n=len(times)), delta=periodo, neutral_delta=True,
-                    help=t("gen.resolucion_de", r=_resolucion(b["res"])))
+                    help=t("gen.resolucion_de", r=resolucion(b["res"])))
 
     _visor(gdf, b, "C3S", rutas, t("sat.ayuda_visor"))
     _bloque_extent(b["extent"])
@@ -218,7 +232,7 @@ def _render_precip(gdf, rutas: dict, fuente: str):
         b = cargar(fuente, gdf, rutas)
 
     times = b["times"]
-    p = _serie_area(b["stats"], "p")
+    p = serie_area(b["stats"], "p")
     spec = RASTER_VARS["p"]
     i_max = int(np.nanargmax(p))
     dias_lluvia = int(np.sum(p >= 1))
@@ -236,7 +250,7 @@ def _render_precip(gdf, rutas: dict, fuente: str):
         metric_card(t("sat.kpi_max_diario"), spec.fmt(p[i_max]), delta=f"{times[i_max]:%d/%m/%Y}",
                     neutral_delta=True)
     with k4:
-        metric_card(t("gen.resolucion_espacial"), _resolucion(b["res"]), delta=t("sat.grilla_nativa"),
+        metric_card(t("gen.resolucion_espacial"), resolucion(b["res"]), delta=t("sat.grilla_nativa"),
                     neutral_delta=True)
 
     _visor(gdf, b, fuente, rutas, t("sat.ayuda_visor"))
@@ -287,7 +301,7 @@ def _render_gee(gdf, rutas: dict):
         b = cargar("GEE", gdf, rutas)
 
     times, sin_nubes = b["times"], b["sin_nubes"]
-    ndvi, ndwi = _serie_area(b["stats"], "ndvi"), _serie_area(b["stats"], "ndwi")
+    ndvi, ndwi = serie_area(b["stats"], "ndvi"), serie_area(b["stats"], "ndwi")
     s_v, s_w = RASTER_VARS["ndvi"], RASTER_VARS["ndwi"]
     dias_validos = int(np.isfinite(ndvi).sum())
     ny, nx = b["forma"]
@@ -312,7 +326,7 @@ def _render_gee(gdf, rutas: dict):
                     delta=t("sat.kpi_despejadas", pct=f"{np.mean(sin_nubes):.0f}"), neutral_delta=True,
                     chart=np.round(sin_nubes, 0).tolist(), chart_type="bar", help=t("sat.kpi_dias_datos_ayuda"))
     with k4:
-        metric_card(t("gen.resolucion_espacial"), _resolucion(b["res"]), delta=t("sat.kpi_grilla", ny=ny, nx=nx),
+        metric_card(t("gen.resolucion_espacial"), resolucion(b["res"]), delta=t("sat.kpi_grilla", ny=ny, nx=nx),
                     neutral_delta=True)
 
     _visor(gdf, b, "GEE", rutas, t("sat.ayuda_visor_gee"))

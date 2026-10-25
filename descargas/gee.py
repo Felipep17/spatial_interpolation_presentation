@@ -8,7 +8,7 @@ Uso:
     NDVI = (NIR − RED) / (NIR + RED)   = (b02 − b01) / (b02 + b01)
     NDWI = (NIR − SWIR) / (NIR + SWIR) = (b02 − b06) / (b02 + b06)   (Gao, 1996)
 - Resolución: los píxeles de 500 m se promedian sobre la grilla fija de 0.009° (~1 km)
-  definida en descargas/comun.py.
+  definida en geoclima/datos/grilla.py.
 - Nubes: por defecto se enmascaran con la banda QA state_1km (nube, sombra y nube interna).
   --sin-mascara-nubes reproduce el comportamiento original del repositorio (sin máscara).
 

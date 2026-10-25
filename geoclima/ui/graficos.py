@@ -3,8 +3,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from components.i18n import t
-from components.theme import COLORS, PLOTLY_CONFIG, SERIE_COLORES, VarSpec, colormap
+from geoclima.ui.i18n import t
+from geoclima.ui.tema import COLORS, PLOTLY_CONFIG, SERIE_COLORES, VarSpec, colormap
 
 
 def serie_temporal(

@@ -9,12 +9,9 @@ import shapely
 import streamlit as st
 from streamlit_folium import st_folium
 
-from components.charts import mostrar, posicion_barrio, serie_vs_ciudad
-from components.i18n import t, t_comuna
-from components.nav import CLAVE_BARRIO
-from components.theme import COLORS, SERIE_COLORES
-from components.ui import boton_descarga, empty_state, metric_card, pista, render_header, section_title, tabla_resumen
-from datos import (
+from geoclima.datos.barrios import barrio_en_clic, geojson_barrios, preparar_barrios, puestos
+from geoclima.datos.estaciones import cargar_y_procesar_estaciones, grilla_1km_estaciones
+from geoclima.datos.fuentes import (
     FUENTES_META,
     cargar_todas,
     indicadores_disponibles,
@@ -23,17 +20,21 @@ from datos import (
     serie_barrio,
     valores_periodo,
 )
-from utils import (
-    barrio_en_clic,
-    cargar_y_procesar_estaciones,
-    control_capas,
-    geojson_barrios,
-    grilla_1km_estaciones,
-    mapa_base,
-    preparar_barrios,
-    puestos,
+from geoclima.mapas.base import control_capas, mapa_base
+from geoclima.paginas.estaciones import _resumen_red
+from geoclima.ui.componentes import (
+    boton_descarga,
+    empty_state,
+    metric_card,
+    pista,
+    render_header,
+    section_title,
+    tabla_resumen,
 )
-from views.estaciones import _resumen_red
+from geoclima.ui.graficos import mostrar, posicion_barrio, serie_vs_ciudad
+from geoclima.ui.i18n import t, t_comuna
+from geoclima.ui.navegacion import CLAVE_BARRIO
+from geoclima.ui.tema import COLORS, SERIE_COLORES
 
 UTM = "EPSG:32618"
 CLAVE_COMPARAR = "comparar"

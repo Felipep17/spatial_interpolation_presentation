@@ -8,20 +8,21 @@ import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
-from components.charts import calendario_semanal, climatologia_semanal, mostrar, serie_temporal
-from components.i18n import conservar, t, t_comuna
-from components.nav import enlace_barrio
-from components.theme import COLORS, VARIABLES, colormap, escala_robusta, leyenda_html
-from components.ui import boton_descarga, empty_state, metric_card, render_header, section_title, tabla_resumen
-from utils import (
-    capa_barrios,
-    capa_comunas,
-    cargar_y_procesar_estaciones,
-    control_capas,
-    grilla_1km_estaciones,
-    mapa_base,
-    preparar_barrios,
+from geoclima.datos.barrios import preparar_barrios
+from geoclima.datos.estaciones import cargar_y_procesar_estaciones, grilla_1km_estaciones
+from geoclima.mapas.base import capa_barrios, capa_comunas, control_capas, mapa_base
+from geoclima.ui.componentes import (
+    boton_descarga,
+    empty_state,
+    metric_card,
+    render_header,
+    section_title,
+    tabla_resumen,
 )
+from geoclima.ui.graficos import calendario_semanal, climatologia_semanal, mostrar, serie_temporal
+from geoclima.ui.i18n import conservar, t, t_comuna
+from geoclima.ui.navegacion import enlace_barrio
+from geoclima.ui.tema import COLORS, VARIABLES, colormap, escala_robusta, leyenda_html
 
 MAPA_ALTO = 640
 _PENDIENTE = "_estacion_pendiente"

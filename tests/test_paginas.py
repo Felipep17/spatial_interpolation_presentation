@@ -10,9 +10,8 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
-import datos
-import utils
-from components.i18n import CLAVE_IDIOMA, t
+from geoclima.datos import fuentes, raster
+from geoclima.ui.i18n import CLAVE_IDIOMA, t
 
 RAIZ = Path(__file__).resolve().parent.parent
 TIEMPO = 300  # la primera ejecución procesa todas las fuentes raster
@@ -21,10 +20,9 @@ TIEMPO = 300  # la primera ejecución procesa todas las fuentes raster
 PLANTILLA = """
 from pathlib import Path
 import streamlit as st
-from components.nav import PAGINAS
-from components.ui import apply_custom_css
-from utils import cargar_shapefile
-from views import {modulo}
+from geoclima.datos.barrios import cargar_shapefile
+from geoclima.paginas import {modulo}
+from geoclima.ui.componentes import apply_custom_css
 
 apply_custom_css()
 INPUTS = Path(r"{raiz}") / "inputs"
@@ -63,6 +61,21 @@ def test_panorama(lang):
 
 
 @pytest.mark.parametrize("lang", ["es", "en"])
+@pytest.mark.parametrize(("indicador", "ambito"), [("C3S:rh", "Toda Cali"), ("CHIRPS:p", "Comuna 19"),
+                                                  ("GEE:ndvi", "Área de expansión")])
+def test_panorama_animacion_diaria(lang, indicador, ambito):
+    at = AppTest.from_string(PLANTILLA.format(modulo="panorama", raiz=RAIZ), default_timeout=TIEMPO)
+    at.session_state[CLAVE_IDIOMA] = lang
+    at.session_state["pan_modo"] = "animacion"
+    at.session_state["pan_ind"] = indicador
+    at.session_state["pan_ambito"] = ambito
+    at.run()
+    _sin_errores(at)
+    assert at.segmented_control(key="pan_modo").value == "animacion"
+    assert at.segmented_control(key="pan_ind").value == indicador
+
+
+@pytest.mark.parametrize("lang", ["es", "en"])
 def test_panorama_por_comuna(lang):
     at = _pagina("panorama", lang)
     # Opciones: [Toda Cali, Comuna 1 … Comuna 22, Área de expansión]. AppTest compara con la etiqueta visible
@@ -85,6 +98,18 @@ def test_fuentes_satelitales(fuente, carpeta, lang, vista, clave):
     assert at.segmented_control(key="fuente").value == carpeta
     assert at.segmented_control(key="vista").value == clave
     assert len(at.metric) == 4
+
+
+@pytest.mark.parametrize("fuente", ["AgERA5", "CHIRPS", "MODIS"])
+def test_fuentes_animacion_por_barrio(fuente):
+    at = AppTest.from_string(PLANTILLA.format(modulo="satelital", raiz=RAIZ), default_timeout=TIEMPO)
+    clave = {"AgERA5": "sat_c3s", "CHIRPS": "sat_chirps", "MODIS": "sat_gee"}[fuente]
+    at.session_state[f"{clave}_modo"] = "animacion"
+    at.query_params["fuente"] = fuente
+    at.query_params["vista"] = "Mapa por barrio"
+    at.run()
+    _sin_errores(at)
+    assert at.segmented_control(key=f"{clave}_modo").value == "animacion"
 
 
 @pytest.mark.parametrize("lang", ["es", "en"])
@@ -153,10 +178,12 @@ def test_cambio_de_idioma_no_recalcula_datos(monkeypatch):
             return funcion(*args, **kwargs)
         return envoltura
 
-    monkeypatch.setattr(datos, "cargar_grilla_nc", contar("netcdf", utils.cargar_grilla_nc))
-    monkeypatch.setattr(datos, "cargar_recorte_nc", contar("netcdf", utils.cargar_recorte_nc))
-    monkeypatch.setattr(datos, "estadisticas_zonales", contar("zonales", utils.estadisticas_zonales))
-    monkeypatch.setattr(datos, "calcular_estadisticas_zonales", contar("zonales", utils.calcular_estadisticas_zonales))
+    # fuentes.py usa estas funciones de raster.py: se cuentan donde las llama
+    monkeypatch.setattr(fuentes, "cargar_grilla_nc", contar("netcdf", raster.cargar_grilla_nc))
+    monkeypatch.setattr(fuentes, "cargar_recorte_nc", contar("netcdf", raster.cargar_recorte_nc))
+    monkeypatch.setattr(fuentes, "estadisticas_zonales", contar("zonales", raster.estadisticas_zonales))
+    monkeypatch.setattr(fuentes, "calcular_estadisticas_zonales",
+                        contar("zonales", raster.calcular_estadisticas_zonales))
     st.cache_data.clear()  # partir de cero para que la primera ejecución sí procese
 
     at = _pagina("satelital", "es", fuente="MODIS")

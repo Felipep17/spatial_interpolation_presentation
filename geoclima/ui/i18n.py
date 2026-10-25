@@ -10,6 +10,7 @@ un par (español, inglés). Una clave inexistente lanza KeyError: las pruebas re
 en ambos idiomas y verifican que cada clave usada en el código esté definida.
 """
 
+import pandas as pd
 import streamlit as st
 
 IDIOMAS = ("es", "en")
@@ -160,6 +161,17 @@ _TEXTOS: dict[str, tuple[str, str]] = {
     "mapa.nombres": ("Nombres", "Names"),
     "mapa.barrios_toca": ("Barrios que toca", "Neighborhoods touched"),
     "mapa.pct_cali": ("% dentro de Cali", "% inside Cali"),
+    "mapa.reproducir": ("Reproducir", "Play"),
+    "mapa.pausar": ("Pausar", "Pause"),
+    "mapa.anterior": ("Día anterior", "Previous day"),
+    "mapa.siguiente": ("Día siguiente", "Next day"),
+    "mapa.dia": ("Día", "Day"),
+    "mapa.de": ("de", "of"),
+    "mapa.n_dias": ("{n} días con dato", "{n} days with data"),
+    "mapa.valor_dia": ("Valor del día", "Value on this day"),
+    "mapa.puesto_dia": ("Puesto del día", "Rank on this day"),
+    "mapa.promedio_dia": ("Promedio Cali del día", "Cali average on this day"),
+    "mapa.nota_escala_dias": ("Escala p2–p98 de todos los días y barrios", "p2–p98 scale across all days and neighborhoods"),
 
     # ------------------------------------------------------------------ Gráficos (Plotly)
     "graf.media": ("Media", "Mean"),
@@ -191,6 +203,21 @@ _TEXTOS: dict[str, tuple[str, str]] = {
                   "Click a neighborhood on the map to see its value and rank, and to open its profile."),
     "exp.mas_altos": ("Valores más altos", "Highest values"),
     "exp.mas_bajos": ("Valores más bajos", "Lowest values"),
+    "exp.modo": ("Vista", "View"),
+    "exp.modo_periodo": ("Periodo", "Period"),
+    "exp.modo_animacion": ("Animación diaria", "Daily animation"),
+    "exp.modo_ayuda": ("Periodo: un valor por barrio para todo el periodo, con ranking. Animación diaria: el valor de "
+                       "cada día, con reproducción.",
+                       "Period: one value per neighborhood for the whole period, with ranking. Daily animation: each "
+                       "day's value, with playback."),
+    "exp.animacion_pista": ("Pulse ▶ para recorrer los días o mueva el deslizador; pase el cursor sobre un barrio para "
+                            "leer su valor y su puesto ese día. El mapa abre en el día de mayor promedio.",
+                            "Press ▶ to step through the days or drag the slider; hover over a neighborhood to read "
+                            "its value and rank on that day. The map opens on the day with the highest average."),
+    "exp.serie_ciudad": ("Promedio de los barrios por día", "Neighborhood average by day"),
+    "exp.dias_omitidos": ("Se omiten {n} días sin ningún dato (nubes).", "{n} days without any data (clouds) are "
+                                                                        "skipped."),
+    "exp.sin_dias": ("No hay días con dato para animar.", "There are no days with data to animate."),
     "exp.empates": ("Fuente gruesa: muchos barrios comparten la misma celda y empatan en el ranking.",
                     "Coarse source: many neighborhoods share the same cell and tie in the ranking."),
 
@@ -558,5 +585,25 @@ def meses(lang: str | None = None) -> list[str]:
 
 
 def locale_js(lang: str | None = None) -> str:
-    """Configuración regional para formatear números en el navegador (lecturas del mapa)."""
-    return "en-US" if (lang or idioma()) == "en" else "es-CO"
+    """Configuración regional para formatear números en el navegador (lecturas de los mapas).
+
+    Punto decimal en ambos idiomas, igual que las cifras que formatea Python en tarjetas, tablas y gráficos.
+    """
+    return "en-US"
+
+
+def rango_fechas(t0, t1, lang: str | None = None) -> str:
+    """Rango compacto: «01–31 ago 2026», «28 ago – 05 sep 2026» o «jun 2014 – ene 2025» (meses en `lang`)."""
+    t0, t1 = pd.Timestamp(t0), pd.Timestamp(t1)
+    m = meses(lang)
+    if (t1 - t0).days > 366:
+        return f"{m[t0.month - 1]} {t0.year} – {m[t1.month - 1]} {t1.year}"
+    if (t0.year, t0.month) == (t1.year, t1.month):
+        return f"{t0.day:02d}–{t1.day:02d} {m[t1.month - 1]} {t1.year}"
+    return f"{t0.day:02d} {m[t0.month - 1]} – {t1.day:02d} {m[t1.month - 1]} {t1.year}"
+
+
+def fecha_corta(fecha, lang: str | None = None) -> str:
+    """«16 ago 2026» / «16 Aug 2026»."""
+    fecha = pd.Timestamp(fecha)
+    return f"{fecha.day:02d} {meses(lang)[fecha.month - 1]} {fecha.year}"

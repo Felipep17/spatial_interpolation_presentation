@@ -1,5 +1,5 @@
 # Sistema de diseño "minimalista ejecutivo".
-# Los mismos tokens se replican en components/theme.py (Plotly, Folium, CSS).
+# Los mismos tokens se replican en geoclima/ui/tema.py (Plotly, Folium, CSS).
 
 [server]
 headless = true

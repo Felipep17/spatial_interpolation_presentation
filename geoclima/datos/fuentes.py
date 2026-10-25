@@ -15,22 +15,20 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from components.i18n import idioma, meses, t
-from components.theme import RASTER_VARS
-from utils import (
+from geoclima.datos.barrios import preparar_barrios
+from geoclima.datos.raster import (
     calcular_estadisticas_zonales,
     cargar_grilla_nc,
     cargar_recorte_nc,
     estadisticas_zonales,
-    generar_mapa_dual,
-    generar_mapa_interactivo,
-    generar_mapa_simple,
     listar_fuentes,
-    preparar_barrios,
     resumen_extent,
 )
+from geoclima.mapas.visor import generar_mapa_dual, generar_mapa_interactivo, generar_mapa_simple
+from geoclima.ui.i18n import idioma, t
+from geoclima.ui.tema import RASTER_VARS
 
-# "variables" y "desc" son claves de traducción (components/i18n.py): usar meta_txt()
+# "variables" y "desc" son claves de traducción (geoclima/ui/i18n.py): usar meta_txt()
 FUENTES_META = {
     "C3S": {
         "nombre": "Copernicus C3S · AgERA5",
@@ -135,7 +133,7 @@ def mapa_html(fuente: str, gdf, rutas: dict, lang: str | None = None) -> str:
 # =========================================================================
 # Localización de archivos y carga por nombre de fuente
 # =========================================================================
-def archivos(fuente: str, lista: list[Path]) -> dict | None:
+def archivos_fuente(fuente: str, lista: list[Path]) -> dict | None:
     """Archivos que necesita cada fuente, o None si faltan."""
     f = fuente.upper()
     if f == "C3S":
@@ -176,24 +174,18 @@ def periodos_fuentes(inputs_path: Path) -> dict:
     """Primer y último día de cada fuente raster, leyendo solo la coordenada de tiempo (rápido)."""
     salida = {}
     for nombre, lista in listar_fuentes(inputs_path / "raster").items():
-        rutas = archivos(nombre, lista)
+        rutas = archivos_fuente(nombre, lista)
         if rutas:
             ruta = next(iter(rutas.values()))
             salida[nombre.upper()] = _fechas_nc(str(ruta), ruta.stat().st_mtime)
     return salida
 
 
-@st.cache_data(show_spinner=False)
-def periodo_estaciones(csv: str, mtime: float) -> tuple:
-    fechas = pd.to_datetime(pd.read_csv(csv, usecols=["Fecha"])["Fecha"])
-    return fechas.min(), fechas.max()
-
-
 def cargar_todas(gdf, inputs_path: Path) -> dict:
     """Bundles de todas las fuentes disponibles, en el orden de presentación."""
     salida = {}
     for nombre, lista in listar_fuentes(inputs_path / "raster").items():
-        rutas = archivos(nombre, lista)
+        rutas = archivos_fuente(nombre, lista)
         if rutas:
             salida[nombre.upper()] = cargar(nombre, gdf, rutas)
     return salida
@@ -283,17 +275,6 @@ def indicadores_disponibles(bundles: dict) -> list[Indicador]:
 
 def periodo_txt(times) -> str:
     return f"{times[0]:%d/%m} – {times[-1]:%d/%m/%Y}"
-
-
-def rango_fechas(t0, t1, lang: str | None = None) -> str:
-    """Rango compacto: «01–31 ago 2026», «28 ago – 05 sep 2026» o «jun 2014 – ene 2025» (meses en `lang`)."""
-    t0, t1 = pd.Timestamp(t0), pd.Timestamp(t1)
-    m = meses(lang)
-    if (t1 - t0).days > 366:
-        return f"{m[t0.month - 1]} {t0.year} – {m[t1.month - 1]} {t1.year}"
-    if (t0.year, t0.month) == (t1.year, t1.month):
-        return f"{t0.day:02d}–{t1.day:02d} {m[t1.month - 1]} {t1.year}"
-    return f"{t0.day:02d} {m[t0.month - 1]} – {t1.day:02d} {m[t1.month - 1]} {t1.year}"
 
 
 def resolucion(grados: float) -> str:

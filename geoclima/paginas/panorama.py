@@ -4,22 +4,28 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from components.charts import barras_comunas, barras_h, cobertura_temporal, mostrar, series_multiples
-from components.i18n import t, t_comuna
-from components.theme import COLORS, RASTER_VARS, SERIE_COLORES
-from components.ui import empty_state, metric_card, render_header, section_title, tabla_resumen, tarjetas_fuentes
-from datos import (
+from geoclima.datos.barrios import orden_comunas, preparar_barrios
+from geoclima.datos.estaciones import cargar_y_procesar_estaciones, periodo_estaciones
+from geoclima.datos.fuentes import (
     FUENTES_META,
     cargar_todas,
     indicadores_disponibles,
     meta_txt,
-    periodo_estaciones,
-    rango_fechas,
     resolucion,
     serie_area,
 )
-from utils import cargar_y_procesar_estaciones, orden_comunas, preparar_barrios
-from views.explorador import TODA_CALI, explorador
+from geoclima.paginas.explorador import TODA_CALI, explorador
+from geoclima.ui.componentes import (
+    empty_state,
+    metric_card,
+    render_header,
+    section_title,
+    tabla_resumen,
+    tarjetas_fuentes,
+)
+from geoclima.ui.graficos import barras_comunas, barras_h, cobertura_temporal, mostrar, series_multiples
+from geoclima.ui.i18n import rango_fechas, t, t_comuna
+from geoclima.ui.tema import COLORS, RASTER_VARS, SERIE_COLORES
 
 # Accesos a los módulos: (clave en `paginas`, clave del título, clave de la descripción)
 MODULOS = [

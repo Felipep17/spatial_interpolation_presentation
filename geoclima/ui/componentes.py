@@ -3,8 +3,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from components.i18n import t
-from components.theme import COLORS
+from geoclima.ui.i18n import t
+from geoclima.ui.tema import COLORS
 
 _BADGE_TONES = {
     "blue": ("#eef4fc", "#1c5cab", "#cde2fb"),
@@ -421,6 +421,22 @@ def empty_state(title: str, body: str):
 
 def sidebar_label(text: str):
     st.html(f'<div class="gc-side-label">{escape(text)}</div>')
+
+
+@st.cache_resource
+def _logo_recortado(ruta: Path, mtime: float):
+    """Recorta el margen transparente del PNG para que los logos se vean más grandes."""
+    from PIL import Image
+
+    img = Image.open(ruta)
+    return img.crop(img.getchannel("A").getbbox()) if img.mode == "RGBA" else img
+
+
+def franja_aliados(aliados_png: Path):
+    """Franja institucional compacta arriba a la derecha (en móvil solo se muestra en el pie)."""
+    if aliados_png.exists():
+        with st.container(horizontal=True, horizontal_alignment="right", key="gc_topbar"):
+            st.image(_logo_recortado(aliados_png, aliados_png.stat().st_mtime), width=440)
 
 
 def render_footer(aliados_png: Path | None = None):
