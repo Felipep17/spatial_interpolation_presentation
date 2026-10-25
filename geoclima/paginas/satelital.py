@@ -57,6 +57,16 @@ def _visor(gdf, b: dict, fuente: str, rutas: dict, ayuda: str):
                            help=t("dl.html_ayuda"))
 
 
+def _enlaces_oficiales(activa: str):
+    """Sitio oficial de cada fuente, con la elegida resaltada."""
+    with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+        st.caption(t("sat.sitios_oficiales"))
+        for f, meta in FUENTES_META.items():
+            st.link_button(meta["corto"], meta["url"], icon=":material/open_in_new:", icon_position="right",
+                           type="primary" if f == activa else "secondary",
+                           help=t("sat.sitio_oficial_ayuda", n=meta["nombre"]))
+
+
 def _tabla_barrios(gdf, df: pd.DataFrame, column_config: dict, nombre: str, key: str):
     """Tabla por barrio con comuna, filtro por comuna, enlace al perfil y descargas CSV/GeoJSON.
 
@@ -136,13 +146,8 @@ def render(gdf, inputs_path: Path):
     lista = fuentes[nombre]
     fuente = nombre.upper()
     if fuente in FUENTES_META:
-        meta = FUENTES_META[fuente]
-        c_info, c_link = st.columns([4, 1], vertical_alignment="center")
-        with c_info:
-            section_title(meta["nombre"], meta_txt(fuente, "desc"))
-        with c_link:
-            st.link_button(t("sat.documentacion"), meta["url"], icon=":material/open_in_new:", type="tertiary",
-                           width="stretch")
+        section_title(FUENTES_META[fuente]["nombre"], meta_txt(fuente, "desc"))
+    _enlaces_oficiales(fuente)
 
     rutas = archivos_fuente(fuente, lista)
     if fuente == "C3S":

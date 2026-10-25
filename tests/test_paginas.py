@@ -98,6 +98,10 @@ def test_fuentes_satelitales(fuente, carpeta, lang, vista, clave):
     assert at.segmented_control(key="fuente").value == carpeta
     assert at.segmented_control(key="vista").value == clave
     assert len(at.metric) == 4
+    # Enlace al sitio oficial de cada fuente; la elegida resaltada
+    enlaces = {b.proto.label: b.proto for b in at.get("link_button")}
+    assert {m["corto"] for m in fuentes.FUENTES_META.values()} <= set(enlaces)
+    assert enlaces[fuentes.FUENTES_META[carpeta]["corto"]].type == "primary"
 
 
 @pytest.mark.parametrize("fuente", ["AgERA5", "CHIRPS", "MODIS"])

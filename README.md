@@ -8,7 +8,7 @@ Integra productos raster (reanálisis y satélite) y estaciones in situ sobre la
 |---|---|---|
 | **Panorama** (inicio) | Todas | **Mapa de barrios** (coropleta del periodo con 6 indicadores, filtro por comuna, ficha al hacer clic y ranking, o **animación diaria** con reproducción), promedio por comuna, cobertura temporal de las fuentes, cuánto distingue cada fuente entre barrios y comparación CHIRPS–MSWEP |
 | **Perfil de barrio** | Todas | Barrio con su comuna, celdas de 1 km, **vecinos** y estaciones cercanas; indicadores con **puesto entre 357 barrios**, gráfico de **posición frente a los demás barrios**, series diarias y **comparación con hasta 2 barrios** (clic en el mapa para cambiar de barrio) |
-| **Fuentes satelitales** | Copernicus C3S · AgERA5 (0.1°) | Humedad relativa y temperatura máxima diarias: **visor diario por píxel** o **mapa del periodo por barrio** |
+| **Fuentes satelitales** | Copernicus C3S · AgERA5 (0.1°) | Humedad relativa y temperatura máxima diarias: **visor diario por píxel** o **mapa del periodo por barrio**. Botones a los **sitios oficiales** de AgERA5, CHIRPS, MSWEP y GEE · MODIS |
 | | CHIRPS v3.0 (0.05°) | Precipitación diaria, mismas dos vistas y acumulados por barrio |
 | | MSWEP (0.1°) | Precipitación diaria multi-fuente, mismas dos vistas |
 | | Google Earth Engine · MODIS (1 km) | NDVI y NDWI diarios sin nubes, mismas dos vistas |
@@ -352,6 +352,10 @@ En el mapa de barrios, la vista **Animación diaria** colorea cada barrio con su
 ### Escalas de color
 
 Los límites de cada paleta se fijan en los **percentiles 2 y 98** de los datos (la precipitación parte de 0), para que los valores extremos no saturen el mapa. Las leyendas se generan desde el mismo colormap que pinta los datos.
+
+### Geometría de los mapas
+
+Los barrios se dibujan con una copia simplificada a ~1 m (`TOLERANCIA_MAPA` en `geoclima/mapas/base.py`) y con coordenadas de 6 decimales. No se nota en el mapa y baja el GeoJSON de barrios de ~2.7 MB a ~0.4 MB, que se arma y se envía al navegador en cada interacción. Las estadísticas zonales y la detección del barrio bajo un clic siguen usando la geometría original.
 
 ### Grillas de 1 km y 11 km en estaciones
 

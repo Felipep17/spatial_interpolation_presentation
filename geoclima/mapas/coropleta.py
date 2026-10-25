@@ -9,7 +9,7 @@ import numpy as np
 from branca.element import Element
 
 from geoclima.datos.barrios import puestos
-from geoclima.mapas.base import ScriptMapa, capa_comunas, control_capas, mapa_base
+from geoclima.mapas.base import ScriptMapa, capa_comunas, control_capas, mapa_base, para_mapa
 from geoclima.ui.i18n import fecha_corta, locale_js, t, t_comuna
 from geoclima.ui.tema import COLORS, VarSpec, colormap, escala_robusta, leyenda_html
 
@@ -32,7 +32,7 @@ def mapa_coropleta(gdf_b, valores, spec: VarSpec, titulo: str, *, etiqueta: str,
     n_validos = int(np.isfinite(vals).sum())
     pos = puestos(vals)
     foco = np.ones(len(vals), bool) if foco is None else np.asarray(foco, bool)
-    datos = gdf_b[["b_id", "nombre_barrio", "comuna", "geometry"]].assign(
+    datos = para_mapa(gdf_b[["b_id", "nombre_barrio", "comuna", "geometry"]]).assign(
         comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)),
         valor=[fmt_valor(v) if np.isfinite(v) else t("mapa.sin_dato", lang) for v in vals],
         puesto=[t("gen.a_de_b", lang, a=p, b=n_validos) if p else "—" for p in pos],
@@ -173,8 +173,8 @@ def mapa_coropleta_animado(gdf_b, matriz_dias, fechas, spec: VarSpec, titulo: st
                 "pausar": t("mapa.pausar", lang)},
     }
 
-    datos = gdf_b[["b_id", "nombre_barrio", "geometry"]].assign(opacidad=np.where(foco, COROPLETA_OPACITY, 0.16))
-    datos["geometry"] = datos.geometry.set_precision(1e-5)  # ~1 m: basta para dibujar y aligera el HTML
+    datos = para_mapa(gdf_b[["b_id", "nombre_barrio", "geometry"]]).assign(
+        opacidad=np.where(foco, COROPLETA_OPACITY, 0.16))
     m = mapa_base(gdf_b, height=height, lang=lang)
     if not foco.all():
         minx, miny, maxx, maxy = gdf_b.loc[foco].total_bounds

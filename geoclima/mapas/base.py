@@ -1,6 +1,9 @@
 """Mapa base común (cámara, mapas base, controles y estilos) y capas de barrios y de comunas."""
 
 import folium
+import geopandas as gpd
+import numpy as np
+import shapely
 import streamlit as st
 from branca.element import Element, MacroElement
 from folium.plugins import Fullscreen
@@ -11,6 +14,11 @@ from geoclima.ui.tema import BARRIO_LINE, COLORS, FONT_STACK, FONT_URL, SAT_URL,
 
 # Cámara compartida por todos los mapas: mismo centro y zoom => sin saltos al cambiar de fuente
 MAP_ZOOM = 11.75
+
+# Geometría para dibujar: simplificada a ~1 m y con coordenadas de 6 decimales (~0.1 m). No se nota en el mapa y
+# baja el GeoJSON de barrios de ~2.7 MB a ~0.4 MB, que se arma y se envía al navegador en cada interacción.
+# Las estadísticas zonales y los clics siguen usando la geometría original.
+TOLERANCIA_MAPA = 1e-5
 
 
 MAP_CSS = f"""
@@ -153,6 +161,19 @@ def mapa_base(gdf, height: int | str = "100%", controles: bool = True, lang: str
 
 
 @st.cache_data(show_spinner=False)
+def _geometria_mapa(_geoms, firma: tuple) -> np.ndarray:
+    simple = shapely.simplify(np.asarray(_geoms), TOLERANCIA_MAPA, preserve_topology=True)
+    return shapely.transform(simple, lambda c: np.round(c, 6))
+
+
+def para_mapa(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Copia de la capa con la geometría liviana para dibujar (mismas filas, mismo orden)."""
+    geoms = gdf.geometry.values
+    firma = (len(geoms), int(shapely.get_num_coordinates(geoms).sum()), *np.round(gdf.total_bounds, 6))
+    return gdf.assign(geometry=gpd.GeoSeries(_geometria_mapa(geoms, firma), index=gdf.index, crs=gdf.crs))
+
+
+@st.cache_data(show_spinner=False)
 def _comunas_geojson(_gdf_b, n: int) -> str:
     comunas = _gdf_b[["comuna", "geometry"]].dissolve("comuna").reset_index()
     comunas["geometry"] = comunas.geometry.simplify(0.00005)
@@ -179,7 +200,8 @@ def capa_barrios(gdf_b, con_pixeles: bool = True, alias_pixeles: str | None = No
     alias = [t("gen.barrio", lang), t("gen.comuna", lang)]
     if con_pixeles:
         alias.append(alias_pixeles or t("mapa.pixeles", lang))
-    datos = gdf_b[["b_id"] + campos + ["geometry"]].assign(comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)))
+    datos = para_mapa(gdf_b[["b_id"] + campos + ["geometry"]]).assign(
+        comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)))
     return folium.GeoJson(
         datos,
         name=t("mapa.limites_barrio", lang),

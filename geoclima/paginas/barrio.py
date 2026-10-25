@@ -20,7 +20,7 @@ from geoclima.datos.fuentes import (
     serie_barrio,
     valores_periodo,
 )
-from geoclima.mapas.base import control_capas, mapa_base
+from geoclima.mapas.base import control_capas, mapa_base, para_mapa
 from geoclima.paginas.estaciones import _resumen_red
 from geoclima.ui.componentes import (
     boton_descarga,
@@ -124,7 +124,7 @@ def render(gdf, inputs_path: Path):
         minx, miny, maxx, maxy = sel_bounds
         m.fit_bounds([[miny - 0.006, minx - 0.006], [maxy + 0.006, maxx + 0.006]])
         folium.GeoJson(
-            barrios[["nombre_barrio", "comuna", "geometry"]].assign(comuna=barrios["comuna"].map(t_comuna)),
+            para_mapa(barrios[["nombre_barrio", "comuna", "geometry"]]).assign(comuna=barrios["comuna"].map(t_comuna)),
             name=t("gen.barrios"),
             style_function=lambda f: {"fillColor": COLORS["ink"], "fillOpacity": 0.0, "color": COLORS["ink_2"],
                                       "weight": 0.6, "opacity": 0.5},
