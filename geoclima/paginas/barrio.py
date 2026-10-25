@@ -20,7 +20,7 @@ from geoclima.datos.fuentes import (
     serie_barrio,
     valores_periodo,
 )
-from geoclima.mapas.base import control_capas, mapa_base, para_mapa
+from geoclima.mapas.base import GeoJsonMapa, control_capas, geojson_mapa, mapa_base
 from geoclima.paginas.estaciones import _resumen_red
 from geoclima.ui.componentes import (
     boton_descarga,
@@ -123,8 +123,8 @@ def render(gdf, inputs_path: Path):
         sel_bounds = gpd.GeoSeries(barrios.geometry.iloc[ks]).total_bounds
         minx, miny, maxx, maxy = sel_bounds
         m.fit_bounds([[miny - 0.006, minx - 0.006], [maxy + 0.006, maxx + 0.006]])
-        folium.GeoJson(
-            para_mapa(barrios[["nombre_barrio", "comuna", "geometry"]]).assign(comuna=barrios["comuna"].map(t_comuna)),
+        GeoJsonMapa(
+            geojson_mapa(barrios[["nombre_barrio", "comuna", "geometry"]].assign(comuna=barrios["comuna"].map(t_comuna))),
             name=t("gen.barrios"),
             style_function=lambda f: {"fillColor": COLORS["ink"], "fillOpacity": 0.0, "color": COLORS["ink_2"],
                                       "weight": 0.6, "opacity": 0.5},
@@ -242,7 +242,7 @@ def render(gdf, inputs_path: Path):
         )
     slug = sel.lower().replace(" ", "_")
     boton_descarga(tabla, f"perfil_{slug}", key="dl_perfil",
-                   geojson=geojson_barrios(barrios, pd.DataFrame([por_barrio_geo]), t("gen.barrio")))
+                   geojson=partial(geojson_barrios, barrios, pd.DataFrame([por_barrio_geo]), t("gen.barrio")))
 
     # ---------------------------------------------------------------------
     # Series diarias del barrio (y comparados) frente a la ciudad

@@ -97,8 +97,12 @@ def _ciclo_anual(df_est: pd.DataFrame, variable: str):
             .reindex(columns=range(1, 54)).sort_index())
 
 
+@st.fragment
 def _bloque_estacional(df_est: pd.DataFrame, variable: str, spec, estacion: str):
-    """Ciclo anual (banda p10–p90 y mediana) con el año elegido, y calendario año × semana."""
+    """Ciclo anual (banda p10–p90 y mediana) con el año elegido, y calendario año × semana.
+
+    Fragmento: cambiar de año solo vuelve a dibujar este bloque.
+    """
     tabla = _ciclo_anual(df_est, variable)
     con_dato = tabla.notna().sum(axis=1)
     anios = [int(a) for a in tabla.index[con_dato > 0]]
@@ -179,6 +183,82 @@ def _resumen_grilla(celdas, r: dict, titulo: str, archivo: str, key: str):
         st.dataframe(con_est, hide_index=True,
                      column_config={nombres["pct_cali"]: st.column_config.NumberColumn(format="%d %%")})
         boton_descarga(vista, archivo, key=key)
+
+
+@st.fragment
+def _mapa_red(gdf, inputs_path: Path, estaciones_info: pd.DataFrame, con_datos: list, estacion_sel: str,
+              resumen: pd.DataFrame, spec):
+    """Mapa de la red con las grillas activables y su resumen.
+
+    Es un fragmento: activar una grilla solo vuelve a dibujar este bloque. Un clic en otra estación sí
+    vuelve a ejecutar toda la página (st.rerun), porque cambia los indicadores y la serie.
+    """
+    t1, t2 = st.columns([3, 2], vertical_alignment="bottom")
+    with t1:
+        section_title(t("est.red"), t("est.red_cap", v=spec.label.lower()))
+    nc_agera5 = _nc_agera5(inputs_path)
+    with t2:
+        ver_grilla = st.toggle(t("est.grilla_toggle"), key="grilla_1km", help=t("est.grilla_ayuda"))
+        ver_agera5 = st.toggle(t("est.grilla_agera5_toggle"), key="grilla_agera5", disabled=nc_agera5 is None,
+                               help=t("est.grilla_agera5_ayuda") if nc_agera5 else t("est.grilla_agera5_sin"))
+    medias = resumen.set_index("Estación")["Media"]
+    cm = colormap(spec.cmap, *escala_robusta(medias.values))
+
+    m = mapa_base(gdf)
+    # El tooltip de cada barrio indica cuántas celdas de 1 km (GEE) toca
+    celdas, info_grilla, celdas_por_barrio = _grilla(gdf, estaciones_info, inputs_path)
+    barrios = preparar_barrios(gdf).assign(n_pixeles=celdas_por_barrio)
+    capa_barrios(barrios, alias_pixeles=t("mapa.celdas_gee")).add_to(m)
+    capa_comunas(barrios).add_to(m)
+
+    fg = folium.FeatureGroup(name=t("gen.estaciones"))
+    info = estaciones_info[estaciones_info["Estacion"].isin(con_datos)]
+    # La seleccionada se dibuja al final para quedar por encima
+    info = info.assign(es_sel=info["Estacion"] == estacion_sel).sort_values("es_sel")
+    for row in info.itertuples():
+        nombre = row.Estacion
+        sel = row.es_sel
+        folium.CircleMarker(
+            location=[row.Latitud, row.Longitud],
+            radius=11 if sel else 7,
+            color=COLORS["ink"] if sel else COLORS["surface"],
+            weight=2.5 if sel else 2,
+            fill=True,
+            fill_color=cm.rgb_hex_str(medias.get(nombre, np.nan)) if nombre in medias else COLORS["muted"],
+            fill_opacity=0.95,
+            tooltip=nombre,  # el clic se identifica por este texto: solo el nombre de la estación
+        ).add_to(fg)
+
+    # Las grillas van debajo de los marcadores; la de 1 km encima de la de 11 km para conservar su detalle
+    grillas = []
+    if ver_agera5 and nc_agera5:
+        celdas_ag, info_ag, _ = grilla_agera5_estaciones(gdf, estaciones_info, str(nc_agera5),
+                                                         nc_agera5.stat().st_mtime)
+        grillas.append(_capa_grilla(celdas_ag, t("mapa.grilla_agera5"), grosor=1.6))
+    if ver_grilla:
+        grillas.append(_capa_grilla(celdas, t("mapa.grilla")))
+    grupos = [*grillas, fg]
+
+    control_capas(m)
+    salida = st_folium(
+        m,
+        key="mapa_estaciones",
+        height=MAPA_ALTO,
+        use_container_width=True,
+        feature_group_to_add=grupos,
+        returned_objects=["last_object_clicked_tooltip"],
+    )
+    st.html(leyenda_html(cm, spec, t("est.leyenda", v=spec.label)))
+    if ver_grilla:
+        _resumen_grilla(celdas, info_grilla, t("est.grilla_toggle"), "grilla_1km_celdas_cali", key="dl_grilla")
+    if ver_agera5 and nc_agera5:
+        _resumen_grilla(celdas_ag, info_ag, t("est.grilla_agera5_toggle"), "grilla_agera5_11km_celdas_cali",
+                        key="dl_grilla_agera5")
+
+    clic = (salida or {}).get("last_object_clicked_tooltip")
+    if clic in con_datos and clic != st.session_state.get("_ultimo_clic"):
+        st.session_state["_ultimo_clic"] = clic
+        _seleccionar(clic)
 
 
 def render(gdf, inputs_path: Path):
@@ -288,72 +368,7 @@ def render(gdf, inputs_path: Path):
     c_mapa, c_serie = st.columns([1.2, 1.3], gap="medium")
 
     with c_mapa:
-        t1, t2 = st.columns([3, 2], vertical_alignment="bottom")
-        with t1:
-            section_title(t("est.red"), t("est.red_cap", v=spec.label.lower()))
-        nc_agera5 = _nc_agera5(inputs_path)
-        with t2:
-            ver_grilla = st.toggle(t("est.grilla_toggle"), key="grilla_1km", help=t("est.grilla_ayuda"))
-            ver_agera5 = st.toggle(t("est.grilla_agera5_toggle"), key="grilla_agera5", disabled=nc_agera5 is None,
-                                   help=t("est.grilla_agera5_ayuda") if nc_agera5 else t("est.grilla_agera5_sin"))
-        medias = resumen.set_index("Estación")["Media"]
-        cm = colormap(spec.cmap, *escala_robusta(medias.values))
-
-        m = mapa_base(gdf)
-        # El tooltip de cada barrio indica cuántas celdas de 1 km (GEE) toca
-        celdas, info_grilla, celdas_por_barrio = _grilla(gdf, estaciones_info, inputs_path)
-        barrios = preparar_barrios(gdf).assign(n_pixeles=celdas_por_barrio)
-        capa_barrios(barrios, alias_pixeles=t("mapa.celdas_gee")).add_to(m)
-        capa_comunas(barrios).add_to(m)
-
-        fg = folium.FeatureGroup(name=t("gen.estaciones"))
-        info = estaciones_info[estaciones_info["Estacion"].isin(con_datos)]
-        # La seleccionada se dibuja al final para quedar por encima
-        info = info.assign(es_sel=info["Estacion"] == estacion_sel).sort_values("es_sel")
-        for row in info.itertuples():
-            nombre = row.Estacion
-            sel = row.es_sel
-            folium.CircleMarker(
-                location=[row.Latitud, row.Longitud],
-                radius=11 if sel else 7,
-                color=COLORS["ink"] if sel else COLORS["surface"],
-                weight=2.5 if sel else 2,
-                fill=True,
-                fill_color=cm.rgb_hex_str(medias.get(nombre, np.nan)) if nombre in medias else COLORS["muted"],
-                fill_opacity=0.95,
-                tooltip=nombre,  # el clic se identifica por este texto: solo el nombre de la estación
-            ).add_to(fg)
-
-        # Las grillas van debajo de los marcadores; la de 1 km encima de la de 11 km para conservar su detalle
-        grillas = []
-        if ver_agera5 and nc_agera5:
-            celdas_ag, info_ag, _ = grilla_agera5_estaciones(gdf, estaciones_info, str(nc_agera5),
-                                                             nc_agera5.stat().st_mtime)
-            grillas.append(_capa_grilla(celdas_ag, t("mapa.grilla_agera5"), grosor=1.6))
-        if ver_grilla:
-            grillas.append(_capa_grilla(celdas, t("mapa.grilla")))
-        grupos = [*grillas, fg]
-
-        control_capas(m)
-        salida = st_folium(
-            m,
-            key="mapa_estaciones",
-            height=MAPA_ALTO,
-            use_container_width=True,
-            feature_group_to_add=grupos,
-            returned_objects=["last_object_clicked_tooltip"],
-        )
-        st.html(leyenda_html(cm, spec, t("est.leyenda", v=spec.label)))
-        if ver_grilla:
-            _resumen_grilla(celdas, info_grilla, t("est.grilla_toggle"), "grilla_1km_celdas_cali", key="dl_grilla")
-        if ver_agera5 and nc_agera5:
-            _resumen_grilla(celdas_ag, info_ag, t("est.grilla_agera5_toggle"), "grilla_agera5_11km_celdas_cali",
-                            key="dl_grilla_agera5")
-
-        clic = (salida or {}).get("last_object_clicked_tooltip")
-        if clic in con_datos and clic != st.session_state.get("_ultimo_clic"):
-            st.session_state["_ultimo_clic"] = clic
-            _seleccionar(clic)
+        _mapa_red(gdf, inputs_path, estaciones_info, con_datos, estacion_sel, resumen, spec)
 
     with c_serie:
         lugar = ubicacion.set_index("Estación").loc[estacion_sel] if estacion_sel in set(ubicacion["Estación"]) else None

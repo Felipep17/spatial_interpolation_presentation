@@ -1,14 +1,19 @@
 """Visores diarios de productos raster: cada píxel día a día, con lectura del píxel y del promedio zonal."""
 
+import io
 import json
 
 import numpy as np
-from branca.element import Element
 from folium.plugins import TimestampedGeoJson
 
-from geoclima.mapas.base import ScriptMapa, capa_barrios, capa_comunas, control_capas, mapa_base
+from geoclima.mapas.base import HtmlFijo, ScriptMapa, capa_barrios, capa_comunas, control_capas, mapa_base
 from geoclima.ui.i18n import locale_js, t
 from geoclima.ui.tema import COLORS, RASTER_OPACITY, RASTER_VARS, colormap, escala_robusta, leyenda_html
+
+
+def _json(datos) -> str:
+    """JSON compacto (sin espacios tras , y :): los visores llevan miles de polígonos."""
+    return json.dumps(datos, separators=(",", ":"))
 
 
 def _periodo(time_vals):
@@ -21,20 +26,22 @@ def _periodo(time_vals):
 
 
 def _features_pixeles(arr, lats, lons, pad, time_vals, cm, opacidad):
+    """Un polígono por píxel y día con dato. Las esquinas van a 6 decimales (~0.1 m): la suma lon ± pad deja ruido
+    de coma flotante (-76.54499999999999) que solo engorda el HTML."""
+    oeste, este = np.round(np.asarray(lons, float) - pad, 6), np.round(np.asarray(lons, float) + pad, 6)
+    sur, norte = np.round(np.asarray(lats, float) - pad, 6), np.round(np.asarray(lats, float) + pad, 6)
     feats = []
     for t_idx, fecha in enumerate(time_vals):
         iso = fecha.isoformat()
-        for i, lat in enumerate(lats):
-            for j, lon in enumerate(lons):
+        for i in range(len(lats)):
+            for j in range(len(lons)):
                 v = float(arr[t_idx, i, j])
                 if np.isnan(v):
                     continue
+                o, e, s, n = float(oeste[j]), float(este[j]), float(sur[i]), float(norte[i])
                 feats.append({
                     "type": "Feature",
-                    "geometry": {"type": "Polygon", "coordinates": [[
-                        [lon - pad, lat - pad], [lon + pad, lat - pad],
-                        [lon + pad, lat + pad], [lon - pad, lat + pad], [lon - pad, lat - pad],
-                    ]]},
+                    "geometry": {"type": "Polygon", "coordinates": [[[o, s], [e, s], [e, n], [o, n], [o, s]]]},
                     "properties": {
                         "times": [iso],
                         "style": {"fillColor": cm.rgb_hex_str(v), "fillOpacity": opacidad,
@@ -46,7 +53,7 @@ def _features_pixeles(arr, lats, lons, pad, time_vals, cm, opacidad):
 
 def _timestamped(fc, period, fmt):
     return TimestampedGeoJson(
-        fc,
+        io.StringIO(_json(fc)),  # como archivo: folium lo inserta tal cual y lo sigue tratando como embebido
         period=period,
         duration=period,
         add_last_point=False,
@@ -123,7 +130,7 @@ def _datos_js(m, capa, grid, barrios, units, var_inicial, lang):
     return (
         "window.GC = {"
         f"map: {m.get_name()}, capaBarrios: {capa.get_name()},"
-        f"grid: {json.dumps(grid)}, barrios: {json.dumps(barrios)}, units: {json.dumps(units)},"
+        f"grid: {_json(grid)}, barrios: {_json(barrios)}, units: {_json(units)},"
         f"var: '{var_inicial}', activo: null, ultimo: null, locale: '{locale_js(lang)}'"
         "};\n"
     )
@@ -161,7 +168,7 @@ def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons
         f'{leyenda_html(cm, sp, opacidad=RASTER_OPACITY, lang=lang)}</div>'
         for n, (c, _, sp, _, cm, _) in enumerate(prep)
     )
-    m.get_root().html.add_child(Element(f"""
+    m.get_root().html.add_child(HtmlFijo(f"""
     <details class="gc-panel" open>
         <summary class="gc-panel-title">{titulo}</summary>
         <div class="gc-seg">
@@ -178,7 +185,7 @@ def generar_mapa_dual(gdf_b, capas, titulo, barrios_stats, time_vals, lats, lons
     window.GC.capas = {{
         {k0}: {tg0.get_name()},
         {k1}: L.timeDimension.layer.geoJson(
-            L.geoJson({json.dumps(fc1)}, {{ style: function(f) {{ return f.properties.style; }} }}),
+            L.geoJson({_json(fc1)}, {{ style: function(f) {{ return f.properties.style; }} }}),
             {{ updateTimeDimension: false, duration: "{period}", period: "{period}" }}
         )
     }};
@@ -224,7 +231,7 @@ def generar_mapa_simple(gdf_b, arr, clave, titulo, leyenda, barrios_stats, time_
     grid = {"lats": [float(x) for x in lats], "lons": [float(x) for x in lons], "pad": float(pad),
             clave: _grilla_js(arr, spec.decimales)}
 
-    m.get_root().html.add_child(Element(f"""
+    m.get_root().html.add_child(HtmlFijo(f"""
     <details class="gc-panel" open>
         <summary class="gc-panel-title">{titulo}</summary>
         {leyenda_html(cm, spec, leyenda, opacidad=RASTER_OPACITY, lang=lang)}

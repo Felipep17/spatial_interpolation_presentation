@@ -35,6 +35,24 @@ MODULOS = [
 ]
 
 
+@st.fragment
+def _mapa_y_comunas(barrios, bundles: dict):
+    """Explorador de barrios y promedio por comuna del indicador elegido.
+
+    Es un fragmento: elegir indicador, ámbito o barrio solo vuelve a ejecutar este bloque, no toda la página.
+    """
+    ind, vals, ambito, foco = explorador(barrios, bundles, indicadores_disponibles(bundles), key="pan")
+
+    # Promedio por comuna con la misma escala de color del mapa
+    comunas = orden_comunas(barrios["comuna"])
+    por_comuna = pd.Series(vals).groupby(barrios["comuna"].to_numpy()).mean().reindex(comunas)
+    section_title(t("pan.por_comuna", ind=ind.etiqueta), t("pan.por_comuna_cap"))
+    mostrar(barras_comunas([t_comuna(c) for c in por_comuna.index], por_comuna.to_numpy(), ind.spec,
+                           unidad=ind.spec.unidad, destacar=None if ambito == TODA_CALI else t_comuna(ambito),
+                           referencia=float(np.nanmean(vals))),
+            key="pan_comunas")
+
+
 def render(gdf, inputs_path: Path, paginas: dict | None = None):
     with st.spinner(t("pan.preparando")):
         bundles = cargar_todas(gdf, inputs_path)
@@ -87,16 +105,7 @@ def render(gdf, inputs_path: Path, paginas: dict | None = None):
     # Mapa de barrios
     # ---------------------------------------------------------------------
     section_title(t("pan.mapa"), t("pan.mapa_cap"))
-    ind, vals, ambito, foco = explorador(barrios, bundles, indicadores_disponibles(bundles), key="pan")
-
-    # Promedio por comuna con la misma escala de color del mapa
-    comunas = orden_comunas(barrios["comuna"])
-    por_comuna = pd.Series(vals).groupby(barrios["comuna"].to_numpy()).mean().reindex(comunas)
-    section_title(t("pan.por_comuna", ind=ind.etiqueta), t("pan.por_comuna_cap"))
-    mostrar(barras_comunas([t_comuna(c) for c in por_comuna.index], por_comuna.to_numpy(), ind.spec,
-                           unidad=ind.spec.unidad, destacar=None if ambito == TODA_CALI else t_comuna(ambito),
-                           referencia=float(np.nanmean(vals))),
-            key="pan_comunas")
+    _mapa_y_comunas(barrios, bundles)
 
     # ---------------------------------------------------------------------
     # Fuentes de datos

@@ -123,6 +123,23 @@ def calcular_estadisticas_zonales(gdf, da_rh, da_t, lat_col, lon_col, pad):
     return gdf_b, stats, time_vals, lats, lons
 
 
+UTM = "EPSG:32618"  # UTM 18N: áreas en m² para Cali
+_CALI: dict = {}
+
+
+def _cali(barrios):
+    """Área de Cali (unión de los barrios) en grados y en UTM. Se calcula una vez por capa de barrios: cada grilla
+    (una por fuente y las de estaciones) la necesita y la unión de 357 polígonos no es barata."""
+    geoms = barrios.geometry.values
+    firma = (len(geoms), int(shapely.get_num_coordinates(geoms).sum()), *np.round(barrios.total_bounds, 6))
+    if firma not in _CALI:
+        cali = barrios.geometry.union_all()
+        cali_utm = gpd.GeoSeries([cali], crs="EPSG:4326").to_crs(UTM).iloc[0]
+        # Sin shapely.prepare: se comparte entre sesiones (hilos) y las geometrías preparadas de GEOS no son seguras
+        _CALI[firma] = (cali, cali_utm)
+    return _CALI[firma]
+
+
 def celdas_sobre_cali(barrios, lats, lons, pad):
     """Celdas de la grilla que tocan algún barrio, con % de su área dentro de Cali.
 
@@ -136,13 +153,15 @@ def celdas_sobre_cali(barrios, lats, lons, pad):
         crs="EPSG:4326",
     )
     total = len(celdas)
-    cali = barrios.geometry.union_all()
-    celdas = celdas[celdas.intersects(cali)].copy()
+    cali, cali_utm = _cali(barrios)
+    celdas = celdas[shapely.intersects(celdas.geometry.values, cali)].copy()
 
-    utm = "EPSG:32618"  # UTM 18N: áreas en m² para Cali
-    celdas_utm = celdas.to_crs(utm)
-    cali_utm = gpd.GeoSeries([cali], crs="EPSG:4326").to_crs(utm).iloc[0]
-    celdas["pct_cali"] = (celdas_utm.intersection(cali_utm).area / celdas_utm.area * 100).round(0)
+    # % del área dentro de Cali. Las celdas enteras dentro valen 100 % sin calcular la intersección (lo más caro)
+    celdas_utm = celdas.geometry.to_crs(UTM).values
+    pct = np.full(len(celdas), 100.0)
+    borde = ~shapely.contains_properly(cali_utm, celdas_utm)
+    pct[borde] = shapely.area(shapely.intersection(celdas_utm[borde], cali_utm)) / shapely.area(celdas_utm[borde]) * 100
+    celdas["pct_cali"] = np.round(pct, 0)
 
     b_idx, c_idx = shapely.STRtree(celdas.geometry.values).query(barrios.geometry.values, predicate="intersects")
     celdas["n_barrios"] = np.bincount(c_idx, minlength=len(celdas))

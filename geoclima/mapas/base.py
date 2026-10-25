@@ -1,11 +1,14 @@
 """Mapa base común (cámara, mapas base, controles y estilos) y capas de barrios y de comunas."""
 
+import json
+
 import folium
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import shapely
 import streamlit as st
-from branca.element import Element, MacroElement
+from branca.element import Element, Figure, MacroElement
 from folium.plugins import Fullscreen
 from jinja2 import Template
 
@@ -115,6 +118,41 @@ MAP_CSS = f"""
 """
 
 
+class HtmlFijo(Element):
+    """HTML o CSS literal dentro del mapa.
+
+    `Element(texto)` compila el texto como plantilla Jinja cada vez que se arma un mapa; con los estilos y los
+    paneles eso era de lo más lento del armado. Aquí la plantilla es fija y el texto se inserta tal cual.
+    """
+
+    _template = Template("{{ this.texto }}")
+
+    def __init__(self, texto: str):
+        super().__init__()
+        self.texto = texto
+
+
+def _render_macro(self, **kwargs):
+    """MacroElement.render de branca 0.8.2, pero con la salida de cada macro insertada tal cual (HtmlFijo).
+
+    El original envuelve esa salida —ya es HTML/JS final— en Element(texto), que la vuelve a compilar como
+    plantilla Jinja: con el GeoJSON de los barrios adentro, era casi la mitad del tiempo de armar un mapa.
+    El resultado es el mismo (solo cambia un salto de línea final que Jinja recortaba).
+    """
+    figure = self.get_root()
+    assert isinstance(figure, Figure), "You cannot render this Element if it is not in a Figure."
+    macros = self._template.module.__dict__
+    for parte, destino in (("header", figure.header), ("html", figure.html), ("script", figure.script)):
+        macro = macros.get(parte, None)
+        if macro is not None:
+            destino.add_child(HtmlFijo(macro(self, kwargs)), name=self.get_name())
+    for element in self._children.values():
+        element.render(**kwargs)
+
+
+MacroElement.render = _render_macro
+
+
 class ScriptMapa(MacroElement):
     """JS que se ejecuta después de crear el mapa y sus capas (sin polling)."""
 
@@ -156,7 +194,7 @@ def mapa_base(gdf, height: int | str = "100%", controles: bool = True, lang: str
     if controles:
         Fullscreen(position="topleft", title=t("mapa.pantalla_completa", lang),
                    title_cancel=t("mapa.salir_pantalla", lang)).add_to(m)
-    m.get_root().header.add_child(Element(MAP_CSS))
+    m.get_root().header.add_child(HtmlFijo(MAP_CSS))
     return m
 
 
@@ -166,11 +204,49 @@ def _geometria_mapa(_geoms, firma: tuple) -> np.ndarray:
     return shapely.transform(simple, lambda c: np.round(c, 6))
 
 
+def _firma(gdf) -> tuple:
+    """Identifica una capa por su geometría (para las cachés que ignoran el GeoDataFrame)."""
+    geoms = gdf.geometry.values
+    return len(geoms), int(shapely.get_num_coordinates(geoms).sum()), *np.round(gdf.total_bounds, 6)
+
+
 def para_mapa(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Copia de la capa con la geometría liviana para dibujar (mismas filas, mismo orden)."""
-    geoms = gdf.geometry.values
-    firma = (len(geoms), int(shapely.get_num_coordinates(geoms).sum()), *np.round(gdf.total_bounds, 6))
-    return gdf.assign(geometry=gpd.GeoSeries(_geometria_mapa(geoms, firma), index=gdf.index, crs=gdf.crs))
+    simple = _geometria_mapa(gdf.geometry.values, _firma(gdf))
+    return gdf.assign(geometry=gpd.GeoSeries(simple, index=gdf.index, crs=gdf.crs))
+
+
+@st.cache_resource(show_spinner=False)
+def _geojson_geometrias(_geoms, firma: tuple) -> dict:
+    """GeoJSON de la geometría liviana, sin propiedades y en el formato de geopandas. Compartido: solo lectura."""
+    capa = gpd.GeoDataFrame(geometry=_geometria_mapa(_geoms, firma), crs="EPSG:4326")
+    return json.loads(json.dumps(capa.__geo_interface__))
+
+
+def geojson_mapa(gdf: gpd.GeoDataFrame) -> dict:
+    """FeatureCollection para folium con la geometría liviana y las demás columnas como propiedades.
+
+    Es lo mismo que folium obtiene de un GeoDataFrame (vía __geo_interface__), pero pasar la geometría a listas
+    de coordenadas —lo más caro de cada mapa— se hace una sola vez; en cada ejecución solo se arman las propiedades.
+    """
+    base = _geojson_geometrias(gdf.geometry.values, _firma(gdf))
+    cols = gdf.columns.drop(gdf.geometry.name)
+    props = gdf[cols].astype(object)  # escalares de Python, como geopandas
+    props[pd.isna(gdf[cols]).values] = None
+    features = [
+        {"id": str(i), "type": "Feature", "properties": dict(zip(cols, fila, strict=True)),
+         "geometry": f["geometry"], "bbox": f["bbox"]}
+        for i, fila, f in zip(gdf.index, props.values, base["features"], strict=True)
+    ]
+    return {"type": "FeatureCollection", "features": features, "bbox": base["bbox"]}
+
+
+class GeoJsonMapa(folium.GeoJson):
+    """folium.GeoJson para datos de geojson_mapa: toma los límites del "bbox" en vez de recorrer cada coordenada."""
+
+    def _get_self_bounds(self):
+        minx, miny, maxx, maxy = self.data["bbox"]
+        return [[miny, minx], [maxy, maxx]]
 
 
 @st.cache_data(show_spinner=False)
@@ -200,10 +276,9 @@ def capa_barrios(gdf_b, con_pixeles: bool = True, alias_pixeles: str | None = No
     alias = [t("gen.barrio", lang), t("gen.comuna", lang)]
     if con_pixeles:
         alias.append(alias_pixeles or t("mapa.pixeles", lang))
-    datos = para_mapa(gdf_b[["b_id"] + campos + ["geometry"]]).assign(
-        comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)))
-    return folium.GeoJson(
-        datos,
+    datos = gdf_b[["b_id"] + campos + ["geometry"]].assign(comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)))
+    return GeoJsonMapa(
+        geojson_mapa(datos),
         name=t("mapa.limites_barrio", lang),
         show=True,
         style_function=lambda x: {

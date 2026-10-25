@@ -6,10 +6,18 @@ import warnings
 import folium
 import geopandas as gpd
 import numpy as np
-from branca.element import Element
 
 from geoclima.datos.barrios import puestos
-from geoclima.mapas.base import ScriptMapa, capa_comunas, control_capas, mapa_base, para_mapa
+from geoclima.mapas.base import (
+    GeoJsonMapa,
+    HtmlFijo,
+    ScriptMapa,
+    capa_comunas,
+    control_capas,
+    geojson_mapa,
+    mapa_base,
+    para_mapa,
+)
 from geoclima.ui.i18n import fecha_corta, locale_js, t, t_comuna
 from geoclima.ui.tema import COLORS, VarSpec, colormap, escala_robusta, leyenda_html
 
@@ -32,7 +40,7 @@ def mapa_coropleta(gdf_b, valores, spec: VarSpec, titulo: str, *, etiqueta: str,
     n_validos = int(np.isfinite(vals).sum())
     pos = puestos(vals)
     foco = np.ones(len(vals), bool) if foco is None else np.asarray(foco, bool)
-    datos = para_mapa(gdf_b[["b_id", "nombre_barrio", "comuna", "geometry"]]).assign(
+    datos = gdf_b[["b_id", "nombre_barrio", "comuna", "geometry"]].assign(
         comuna=gdf_b["comuna"].map(lambda c: t_comuna(c, lang)),
         valor=[fmt_valor(v) if np.isfinite(v) else t("mapa.sin_dato", lang) for v in vals],
         puesto=[t("gen.a_de_b", lang, a=p, b=n_validos) if p else "—" for p in pos],
@@ -44,8 +52,8 @@ def mapa_coropleta(gdf_b, valores, spec: VarSpec, titulo: str, *, etiqueta: str,
     if not foco.all():
         minx, miny, maxx, maxy = gdf_b.loc[foco].total_bounds
         m.fit_bounds([[miny - 0.004, minx - 0.004], [maxy + 0.004, maxx + 0.004]])
-    folium.GeoJson(
-        datos,
+    GeoJsonMapa(
+        geojson_mapa(datos),
         name=etiqueta,
         style_function=lambda f: {"fillColor": f["properties"]["relleno"], "fillOpacity": f["properties"]["opacidad"],
                                   "color": "#ffffff", "weight": 0.7, "opacity": 0.9},
@@ -70,7 +78,7 @@ def mapa_coropleta(gdf_b, valores, spec: VarSpec, titulo: str, *, etiqueta: str,
 
     control_capas(m)
     pista_html = f'<div class="gc-legend-note" style="margin-top:8px">{pista}</div>' if pista else ""
-    m.get_root().html.add_child(Element(f"""
+    m.get_root().html.add_child(HtmlFijo(f"""
     <details class="gc-panel" open>
         <summary class="gc-panel-title">{titulo}</summary>
         {leyenda_html(cm, spec, etiqueta, opacidad=COROPLETA_OPACITY, nota=t("mapa.nota_escala_barrios", lang),
@@ -196,7 +204,7 @@ def mapa_coropleta_animado(gdf_b, matriz_dias, fechas, spec: VarSpec, titulo: st
              ("gc-a-pos", "mapa.puesto_dia"), ("gc-a-media", "mapa.promedio_dia")]
     lectura = "".join(f'<div class="gc-readout-row"><span>{t(k, lang)}</span><span id="{i}">—</span></div>'
                       for i, k in filas)
-    m.get_root().html.add_child(Element(f"""
+    m.get_root().html.add_child(HtmlFijo(f"""
     <details class="gc-panel" open>
         <summary class="gc-panel-title">{titulo}</summary>
         {leyenda_html(cm, spec, etiqueta, opacidad=COROPLETA_OPACITY, nota=t("mapa.nota_escala_dias", lang), lang=lang)}
@@ -212,7 +220,7 @@ def mapa_coropleta_animado(gdf_b, matriz_dias, fechas, spec: VarSpec, titulo: st
         <span class="gc-anim-n">{t("mapa.n_dias", lang, n=len(fechas))}</span>
     </div>
     """))
-    js = f"window.GCA = Object.assign({json.dumps(datos_js)}, {{map: {m.get_name()}, capa: {capa.get_name()}, " \
+    js = f"window.GCA = Object.assign({json.dumps(datos_js, separators=(',', ':'))}, {{map: {m.get_name()}, capa: {capa.get_name()}, " \
          "t: 0, timer: null, activo: null});\n" + _JS_ANIMACION
     ScriptMapa(js).add_to(m)
     return m

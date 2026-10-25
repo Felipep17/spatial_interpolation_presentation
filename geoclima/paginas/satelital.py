@@ -1,4 +1,5 @@
 import warnings
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,13 @@ VISTAS = {"diario": "sat.vista_diario", "periodo": "sat.vista_periodo"}
 ETIQUETA_FUENTE = {"C3S": "AgERA5", "CHIRPS": "CHIRPS", "MSWEP": "MSWEP", "GEE": "MODIS"}
 
 
+@st.fragment
+def _explorador_fuente(gdf, b: dict, fuente: str):
+    """Mapa por barrio de la fuente. Fragmento: sus controles y clics no vuelven a ejecutar toda la página."""
+    indicadores = [i for i in INDICADORES if i.fuente == fuente]
+    explorador(preparar_barrios(gdf), {fuente: b}, indicadores, key=f"sat_{fuente.lower()}", alto=MAP_HEIGHT)
+
+
 def _visor(gdf, b: dict, fuente: str, rutas: dict, ayuda: str):
     """Visor diario (raster por píxel) o coropleta del periodo por barrio, a elección del usuario."""
     conservar("vista")
@@ -43,8 +51,7 @@ def _visor(gdf, b: dict, fuente: str, rutas: dict, ayuda: str):
                                  required=True, key="vista", bind="query-params", label_visibility="collapsed",
                                  help=t("sat.vista_ayuda"))
     if vista == "periodo":
-        indicadores = [i for i in INDICADORES if i.fuente == fuente]
-        explorador(preparar_barrios(gdf), {fuente: b}, indicadores, key=f"sat_{fuente.lower()}", alto=MAP_HEIGHT)
+        _explorador_fuente(gdf, b, fuente)
         return
     html = mapa_html(fuente, gdf, rutas)  # HTML por idioma, sobre el bundle ya cacheado
     st.iframe(html, height=MAP_HEIGHT)
@@ -52,9 +59,9 @@ def _visor(gdf, b: dict, fuente: str, rutas: dict, ayuda: str):
     with c_txt:
         st.caption(ayuda)
     with c_dl:
-        st.download_button(t("dl.html"), html.encode("utf-8"), file_name=f"visor_{fuente.lower()}.html",
-                           mime="text/html", icon=":material/download:", type="tertiary", key=f"dl_html_{fuente}",
-                           help=t("dl.html_ayuda"))
+        st.download_button(t("dl.html"), partial(str.encode, html, "utf-8"), file_name=f"visor_{fuente.lower()}.html",
+                           mime="text/html", on_click="ignore", icon=":material/download:", type="tertiary",
+                           key=f"dl_html_{fuente}", help=t("dl.html_ayuda"))
 
 
 def _enlaces_oficiales(activa: str):
@@ -67,10 +74,12 @@ def _enlaces_oficiales(activa: str):
                            help=t("sat.sitio_oficial_ayuda", n=meta["nombre"]))
 
 
+@st.fragment
 def _tabla_barrios(gdf, df: pd.DataFrame, column_config: dict, nombre: str, key: str):
     """Tabla por barrio con comuna, filtro por comuna, enlace al perfil y descargas CSV/GeoJSON.
 
-    `df` trae la columna del barrio con el encabezado traducido (t("gen.barrio")).
+    `df` trae la columna del barrio con el encabezado traducido (t("gen.barrio")). Es un fragmento: filtrar o
+    elegir una fila no vuelve a ejecutar la página ni a enviar el visor de arriba.
     """
     barrio, comuna = t("gen.barrio"), t("gen.comuna")
     barrios = preparar_barrios(gdf)
@@ -96,7 +105,7 @@ def _tabla_barrios(gdf, df: pd.DataFrame, column_config: dict, nombre: str, key:
             enlace_barrio(df.iloc[filas[0]][barrio])
         else:
             st.caption(f":material/touch_app: {t('sat.fila_pista')}")
-    boton_descarga(df, nombre, key=key, geojson=geojson_barrios(barrios, df, barrio))
+    boton_descarga(df, nombre, key=key, geojson=partial(geojson_barrios, barrios, df, barrio))
 
 
 def _bloque_extent(r: dict, clave_unidad: str = "sat.pixeles_barrio"):

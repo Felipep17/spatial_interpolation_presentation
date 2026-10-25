@@ -1,3 +1,5 @@
+import io
+from collections.abc import Callable
 from html import escape
 from pathlib import Path
 
@@ -326,19 +328,26 @@ def tabla_resumen(filas: list[tuple[str, str]]):
     st.html(f'<div class="gc-grid-summary">{filas_html}</div>')
 
 
-def boton_descarga(df, nombre: str, key: str, geojson: bytes | None = None):
+def boton_descarga(df, nombre: str, key: str, geojson: Callable[[], bytes] | None = None):
     """Descarga CSV de una tabla (sin columnas de mini-gráficos). UTF-8 con BOM para Excel.
 
-    Si se pasa `geojson`, añade al lado la descarga de la capa vectorial (para QGIS/ArcGIS).
+    Si se pasa `geojson` (función que devuelve los bytes), añade al lado la descarga de la capa vectorial
+    (para QGIS/ArcGIS). Los archivos se generan al hacer clic y la descarga no vuelve a ejecutar la página.
     """
     columnas = [c for c in df.columns
                 if c != "geometry" and not df[c].map(lambda v: isinstance(v, (list, tuple))).any()]
+    datos = df[columnas]
+
+    def csv() -> bytes:
+        return datos.to_csv(index=False).encode("utf-8-sig")
+
     with st.container(horizontal=True, gap="small"):
         st.download_button(
             t("dl.csv"),
-            df[columnas].to_csv(index=False).encode("utf-8-sig"),
+            csv,
             file_name=f"{nombre}.csv",
             mime="text/csv",
+            on_click="ignore",
             icon=":material/download:",
             type="tertiary",
             key=key,
@@ -349,6 +358,7 @@ def boton_descarga(df, nombre: str, key: str, geojson: bytes | None = None):
                 geojson,
                 file_name=f"{nombre}.geojson",
                 mime="application/geo+json",
+                on_click="ignore",
                 icon=":material/map:",
                 type="tertiary",
                 key=f"{key}_geo",
@@ -424,19 +434,29 @@ def sidebar_label(text: str):
 
 
 @st.cache_resource
-def _logo_recortado(ruta: Path, mtime: float):
-    """Recorta el margen transparente del PNG para que los logos se vean más grandes."""
+def _logo_png(ruta: Path, mtime: float, ancho: int, recortar: bool) -> bytes:
+    """PNG del logo ya reducido al ancho en que se muestra.
+
+    Es la misma reducción que haría st.image (bilineal, a PNG), pero una sola vez: st.image la repetía en cada
+    ejecución de la página. `recortar` quita el margen transparente para que los logos se vean más grandes.
+    """
     from PIL import Image
 
     img = Image.open(ruta)
-    return img.crop(img.getchannel("A").getbbox()) if img.mode == "RGBA" else img
+    if recortar and img.mode == "RGBA":
+        img = img.crop(img.getchannel("A").getbbox())
+    if img.width > ancho:
+        img = img.resize((ancho, int(1.0 * img.height * ancho / img.width)), resample=Image.BILINEAR)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def franja_aliados(aliados_png: Path):
     """Franja institucional compacta arriba a la derecha (en móvil solo se muestra en el pie)."""
     if aliados_png.exists():
         with st.container(horizontal=True, horizontal_alignment="right", key="gc_topbar"):
-            st.image(_logo_recortado(aliados_png, aliados_png.stat().st_mtime), width=440)
+            st.image(_logo_png(aliados_png, aliados_png.stat().st_mtime, 440, recortar=True), width=440)
 
 
 def render_footer(aliados_png: Path | None = None):
@@ -444,11 +464,7 @@ def render_footer(aliados_png: Path | None = None):
     if aliados_png and aliados_png.exists():
         with st.container(border=True, key="gc_aliados", horizontal_alignment="center", gap="small"):
             st.html(f'<div class="gc-aliados-label">{escape(t("pie.aliados"))}</div>')
-            st.image(
-                str(aliados_png),
-                width=900,
-                caption=None,
-            )
+            st.image(_logo_png(aliados_png, aliados_png.stat().st_mtime, 900, recortar=False), width=900)
     st.html(
         f"""
         <div class="gc-footer">

@@ -353,9 +353,15 @@ En el mapa de barrios, la vista **Animación diaria** colorea cada barrio con su
 
 Los límites de cada paleta se fijan en los **percentiles 2 y 98** de los datos (la precipitación parte de 0), para que los valores extremos no saturen el mapa. Las leyendas se generan desde el mismo colormap que pinta los datos.
 
-### Geometría de los mapas
+### Rendimiento
 
-Los barrios se dibujan con una copia simplificada a ~1 m (`TOLERANCIA_MAPA` en `geoclima/mapas/base.py`) y con coordenadas de 6 decimales. No se nota en el mapa y baja el GeoJSON de barrios de ~2.7 MB a ~0.4 MB, que se arma y se envía al navegador en cada interacción. Las estadísticas zonales y la detección del barrio bajo un clic siguen usando la geometría original.
+Todo lo siguiente deja los datos y las vistas iguales; solo evita trabajo repetido:
+
+- **Geometría de los mapas.** Los barrios se dibujan con una copia simplificada a ~1 m (`TOLERANCIA_MAPA` en `geoclima/mapas/base.py`) y con coordenadas de 6 decimales: el GeoJSON baja de ~2.7 MB a ~0.4 MB. Se convierte a GeoJSON una sola vez (`geojson_mapa`) y sus límites salen del `bbox` (`GeoJsonMapa`). Las estadísticas zonales y la detección del barrio bajo un clic siguen usando la geometría original.
+- **Fragmentos** (`st.fragment`). El explorador de barrios (Panorama y Fuentes), la tabla de barrios de Fuentes, el mapa de la red con sus grillas y el ciclo anual de Estaciones se vuelven a ejecutar solos al interactuar con ellos, sin rehacer ni reenviar el resto de la página.
+- **Descargas al hacer clic.** CSV, GeoJSON y mapa HTML se generan cuando se pulsa el botón y la descarga no vuelve a ejecutar la página.
+- **Armado de mapas.** El CSS y los paneles se insertan sin compilarlos como plantillas Jinja (`HtmlFijo`), y `MacroElement.render` de branca se reemplaza por una versión que no vuelve a compilar la salida de cada capa (`_render_macro`). Los visores usan JSON compacto y esquinas de píxel a 6 decimales.
+- **Cálculos únicos.** El área de Cali (unión de barrios) se calcula una vez para todas las grillas, y las celdas enteras dentro de Cali no necesitan calcular su intersección. Los logos se reducen una sola vez, con el mismo método de `st.image`.
 
 ### Grillas de 1 km y 11 km en estaciones
 
