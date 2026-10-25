@@ -108,14 +108,23 @@ pip install -r descargas/requirements.txt
 uv run streamlit run app.py
 ```
 
-Abre **http://localhost:8501** en el navegador.
+La terminal muestra la dirección en la que quedó la app; ábrela en el navegador (el proyecto corre en modo `headless`, así que no se abre sola):
 
-| Página | URL |
+```
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://192.168.x.x:8501
+```
+
+> **El puerto puede variar.** Streamlit usa **8501** por defecto, pero si ese puerto ya está ocupado en tu equipo (por ejemplo, por otra app de Streamlit abierta) toma automáticamente el siguiente libre: 8502, 8503… Usa siempre la `Local URL` que aparece en la terminal. En los ejemplos de este documento se escribe `localhost:8501`; cámbialo por tu puerto si es otro.
+
+| Página | Ruta (después de la dirección local, p. ej. `http://localhost:8501`) |
 |---|---|
-| Panorama (por defecto) | `http://localhost:8501/` |
-| Fuentes satelitales | `http://localhost:8501/satelital?fuente=MODIS&vista=Mapa+por+barrio` |
-| Estaciones in situ | `http://localhost:8501/estaciones?variable=Precipitación&estacion=MELENDEZ` |
-| Perfil de barrio | `http://localhost:8501/barrio?barrio=Nueva+Floresta&comparar=Belalcázar` |
+| Panorama (por defecto) | `/` |
+| Fuentes satelitales | `/satelital?fuente=MODIS&vista=Mapa+por+barrio` |
+| Estaciones in situ | `/estaciones?variable=Precipitación&estacion=MELENDEZ` |
+| Perfil de barrio | `/barrio?barrio=Nueva+Floresta&comparar=Belalcázar` |
 
 **Enlaces compartibles.** Las selecciones principales viven en la URL, así que basta copiar la dirección del navegador:
 
@@ -132,7 +141,7 @@ Abre **http://localhost:8501** en el navegador.
 Opciones útiles:
 
 ```bash
-# Otro puerto
+# Puerto fijo (si está ocupado, Streamlit da error en lugar de buscar otro)
 uv run streamlit run app.py --server.port 8600
 
 # Exponer en la red local (p. ej. para presentar desde otro equipo)
@@ -402,9 +411,10 @@ uv add --dev watchdog
 | `No se encontró la capa vectorial de barrios` | `inputs/shapefiles/` vacía o con formato no soportado | Agrega un `.parquet`, `.shp` (con sus `.dbf/.shx/.prj`), `.geojson` o `.gpkg` |
 | El mapa se ve gris, sin calles | Sin internet, firewall o bloqueo del servidor de OSM | Revisa la conexión; en redes corporativas permite `tile.openstreetmap.org`. Si persiste, cambia el proveedor (sección 6) |
 | "Archivos incompletos" en C3S | Los nombres no contienen `relative_humidity` / `temperature_maximu` | Renombra los archivos o ajusta la búsqueda en `geoclima/datos/fuentes.py` (`archivos_fuente`) |
-| `Port 8501 is already in use` | Ya hay otra app corriendo | Ciérrala o usa `--server.port 8600` |
+| La app no responde en `localhost:8501` | Ese puerto estaba ocupado y Streamlit usó otro (8502, 8503…) | Abre la `Local URL` que muestra la terminal |
+| `Port 8600 is already in use` (o el puerto que hayas fijado) | Se fijó el puerto con `--server.port` y ya está ocupado | Cierra la otra app, elige otro puerto o quita `--server.port` para que Streamlit busque uno libre |
 | Datos viejos tras reemplazar un archivo | Caché del navegador o de Streamlit | Menú ⋮ → **Clear cache** y recarga, o reinicia el servidor |
-| "Page not found" al abrir una URL antigua | La página de inicio (Panorama) se sirve en `/` | Usa `http://localhost:8501/` o las rutas de la sección 3 |
+| "Page not found" al abrir una URL antigua | La página de inicio (Panorama) se sirve en `/` | Usa la dirección raíz de la terminal (p. ej. `http://localhost:8501/`) o las rutas de la sección 3 |
 | Error al compilar `netCDF4` o `geopandas` | Python fuera del rango soportado | Usa Python 3.11–3.13 (`uv python pin 3.12 && uv sync`) |
 
 Para reinstalar el entorno desde cero:
